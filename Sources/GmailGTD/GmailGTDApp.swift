@@ -36,7 +36,14 @@ struct GmailGTDApp: App {
             ContentView()
                 .environment(model)
                 .frame(minWidth: 1000, minHeight: 560)
-                .task { await model.start() }
+                .task {
+                    if ScreenshotExport.directory != nil { ScreenshotExport.log("window task started") }
+                    await model.start()
+                    if let folder = ScreenshotExport.directory {
+                        ScreenshotExport.log("model started, demo=\(model.demo), folder=\(model.folder)")
+                        await ScreenshotExport.run(model: model, into: folder)
+                    }
+                }
         }
         .commands {
             CommandGroup(replacing: .appSettings) {
