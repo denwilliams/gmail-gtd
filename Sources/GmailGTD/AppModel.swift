@@ -43,6 +43,8 @@ struct UndoMove: Identifiable {
     let subject: String
     let before: Set<String>
     let summary: String
+    /// The bucket it moved to, or nil for the inbox. Drives the toast's colour.
+    let destination: GTDBucket?
     let origin: Folder
     let row: ThreadRow?
     let index: Int?
@@ -532,7 +534,8 @@ final class AppModel {
                        waiting.first { $0.id == id }?.subject]
             .compactMap { $0 }.first { !$0.isEmpty } ?? "(no subject)"
         let removed = removeLocally(id)
-        let move = UndoMove(threadID: id, subject: subject, before: before, summary: summary,
+        let target: GTDBucket? = if case .bucket(let b) = destination { b } else { nil }
+        let move = UndoMove(threadID: id, subject: subject, before: before, summary: summary, destination: target,
                             origin: folder, row: removed.row, index: removed.index, todayList: removed.list)
         remember(move)
         enqueueRemote { [weak self] in

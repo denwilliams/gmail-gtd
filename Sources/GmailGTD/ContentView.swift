@@ -122,8 +122,10 @@ struct UndoToast: View {
     let move: UndoMove
 
     var body: some View {
+        let tint = move.destination?.color ?? .accentColor
+        let symbol = move.destination.map { Folder.bucket($0).symbol } ?? Folder.inbox.symbol
         HStack(spacing: 10) {
-            Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+            Image(systemName: symbol).foregroundStyle(tint)
             Text(move.summary).fontWeight(.medium)
             Text(move.subject).foregroundStyle(.secondary).lineLimit(1)
             Button("Undo") { Task { await model.undoLastMove() } }.buttonStyle(.link)
@@ -131,8 +133,10 @@ struct UndoToast: View {
         }
         .font(.callout)
         .padding(.horizontal, 14).padding(.vertical, 8)
+        // Washed with the destination bucket's colour, so it registers at a glance.
         .background(.regularMaterial, in: Capsule())
-        .overlay(Capsule().strokeBorder(.quaternary))
+        .background(tint.opacity(0.22), in: Capsule())
+        .overlay(Capsule().strokeBorder(tint.opacity(0.6), lineWidth: 1.5))
         .shadow(color: .black.opacity(0.15), radius: 8, y: 2)
         .frame(maxWidth: 560)
         .accessibilityElement(children: .combine)
