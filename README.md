@@ -25,6 +25,21 @@ swift run GmailGTD --demo        # or press "Try Demo" on the sign-in screen
 swift run gtd --demo process     # CLI; each command starts from a fresh mailbox
 ```
 
+## Building the app
+
+`swift run` gives a bare executable. Its Dock icon is drawn at launch, but it isn't a real app. To build
+a proper `GmailGTD.app` with an icon you can double-click or drag to Applications:
+
+```sh
+scripts/make-app.sh            # release build, writes build/GmailGTD.app
+scripts/make-app.sh debug      # faster, for development
+open build/GmailGTD.app --args --demo
+```
+
+The icon is drawn in code (`Sources/GmailGTD/AppIcon.swift`); the script asks the app to export it and
+turns it into an `.icns`. The bundle is ad-hoc signed, which is enough to run on this Mac. Sharing it
+with other Macs would need a Developer ID signature and notarisation.
+
 ## Setup
 
 1. In Google Cloud (inside your Workspace org), create a project and enable the **Gmail API**.

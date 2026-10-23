@@ -6,7 +6,15 @@ import GTDCore
 /// window or Dock icon. Promote it to a regular foreground app on launch.
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Build tooling: `GmailGTD --export-icon <folder>.iconset` writes the icon files and quits.
+        let args = CommandLine.arguments
+        if let i = args.firstIndex(of: "--export-icon"), args.indices.contains(i + 1) {
+            AppIcon.exportIconset(to: args[i + 1])
+            NSApp.terminate(nil)
+            return
+        }
         NSApp.setActivationPolicy(.regular)
+        NSApp.applicationIconImage = AppIcon.image   // the Dock icon when there is no app bundle
         NSApp.activate(ignoringOtherApps: true)
     }
 }
