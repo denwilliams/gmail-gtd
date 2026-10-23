@@ -58,12 +58,6 @@ struct MailView: View {
             }
             .navigationSplitViewColumnWidth(min: 170, ideal: 200)
             .focused($focus, equals: .sidebar)
-            .onKeyPress(.rightArrow) {
-                // Today has no list to move into.
-                guard model.folder != .today, !model.rows.isEmpty else { return .ignored }
-                focus = .list
-                return .handled
-            }
         } detail: {
             switch model.folder {
             case .today: TodayView()
@@ -73,24 +67,47 @@ struct MailView: View {
         }
         .navigationTitle(model.folder.title)
         .defaultFocus($focus, .sidebar)
-        .safeAreaInset(edge: .bottom) {
-            if let error = model.error {
-                Text(error).font(.callout).foregroundStyle(.red).padding(8).frame(maxWidth: .infinity).background(.bar)
-            } else if let notice = model.notice {
-                HStack {
-                    Text(notice).font(.callout).foregroundStyle(.secondary)
-                    Spacer()
-                    Button("Dismiss") { model.notice = nil }.buttonStyle(.link)
-                }
-                .padding(8).background(.bar)
-            } else if model.demo {
-                Text("Demo mode: sample mail, resets on relaunch").font(.caption).foregroundStyle(.secondary)
-                    .padding(6).frame(maxWidth: .infinity).background(.bar)
+        .onChange(of: focus) { _, pane in model.focusedPane = pane }
+        .onChange(of: model.focusRequest) { _, pane in
+            guard let pane else { return }
+            focus = pane
+            model.focusRequest = nil
+        }
+        .overlay {
+            if model.showShortcuts {
+                ShortcutHUD().onTapGesture { model.shortcutsPinned = false }
+            }
+        }
+        .animation(.easeOut(duration: 0.12), value: model.showShortcuts)
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            VStack(spacing: 0) {
+                if model.folder != .today { KeyHintBar() }
+                StatusBar()
             }
         }
         .toolbar {
             ToolbarItem { Button("Refresh", systemImage: "arrow.clockwise") { Task { await model.folderRefresh() } } }
             ToolbarItem { Button("Sign Out") { model.signOut() } }
+        }
+    }
+}
+
+struct StatusBar: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        if let error = model.error {
+            Text(error).font(.callout).foregroundStyle(.red).padding(8).frame(maxWidth: .infinity).background(.bar)
+        } else if let notice = model.notice {
+            HStack {
+                Text(notice).font(.callout).foregroundStyle(.secondary)
+                Spacer()
+                Button("Dismiss") { model.notice = nil }.buttonStyle(.link)
+            }
+            .padding(8).background(.bar)
+        } else if model.demo {
+            Text("Demo mode: sample mail, resets on relaunch").font(.caption).foregroundStyle(.secondary)
+                .padding(6).frame(maxWidth: .infinity).background(.bar)
         }
     }
 }
@@ -348,6 +365,88 @@ struct ProjectDetailView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             ContentUnavailableView("No Project Selected", systemImage: "square.stack.3d.up").frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+}
+
+
+// MARK: - Keyboard shortcuts
+
+/// A keycap-styled label.
+struct Key: View {
+    let label: String
+    init(_ label: String) { self.label = label }
+
+    var body: some View {
+        Text(label)
+            .font(.system(.caption, design: .rounded).weight(.medium))
+            .padding(.horizontal, 6).padding(.vertical, 2)
+            .background(.quaternary, in: RoundedRectangle(cornerRadius: 5))
+    }
+}
+
+/// Always-visible one-line reminder of the main keys.
+struct KeyHintBar: View {
+    var body: some View {
+        HStack(spacing: 14) {
+            hint(["↑", "↓"], "move")
+            hint(["←", "→"], "switch pane")
+            hint(["1", "–", "5"], "file")
+            hint(["A"], "accept")
+            hint(["O"], "open in Gmail")
+            Spacer()
+            Text("Hold ⌘ for all shortcuts").font(.caption).foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 12).padding(.vertical, 5)
+        .background(.bar)
+        .overlay(alignment: .top) { Divider() }
+    }
+
+    private func hint(_ keys: [String], _ text: String) -> some View {
+        HStack(spacing: 4) {
+            ForEach(Array(keys.enumerated()), id: \.offset) { _, k in Key(k) }
+            Text(text).font(.caption).foregroundStyle(.secondary)
+        }
+    }
+}
+
+/// Full cheat-sheet, shown while ⌘ is held or when pinned with ⌘/.
+struct ShortcutHUD: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Keyboard Shortcuts").font(.title3.bold())
+            HStack(alignment: .top, spacing: 36) {
+                group("Navigate", [
+                    (["↑", "↓"], "Move through categories or threads"),
+                    (["←", "→"], "Switch between categories and threads"),
+                ])
+                group("File the open thread", GTDBucket.allCases.map { ([String($0.shortcut)], $0.title) } + [
+                    (["0"], "Back to Inbox"),
+                ])
+                group("Thread", [
+                    (["A"], "Accept the suggestion"),
+                    (["R"], "Regenerate the suggestion"),
+                    (["O"], "Open in Gmail"),
+                    (["⌘", "/"], "Pin or hide this list"),
+                ])
+            }
+        }
+        .padding(24)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+        .shadow(radius: 20)
+        .padding(40)
+    }
+
+    private func group(_ title: String, _ rows: [([String], String)]) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title).font(.headline)
+            ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+                HStack(spacing: 8) {
+                    HStack(spacing: 3) { ForEach(Array(row.0.enumerated()), id: \.offset) { _, k in Key(k) } }
+                        .frame(width: 56, alignment: .leading)
+                    Text(row.1)
+                }
+            }
         }
     }
 }

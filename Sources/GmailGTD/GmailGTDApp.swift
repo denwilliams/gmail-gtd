@@ -25,15 +25,27 @@ struct GmailGTDApp: App {
         }
         .commands {
             CommandMenu("Triage") {
-                ForEach(GTDBucket.allCases, id: \.self) { bucket in
-                    Button("File as \(bucket.title)") { Task { await model.fileSelected(into: bucket) } }
-                        .keyboardShortcut(KeyEquivalent(bucket.shortcut), modifiers: [])
+                // Plain-key shortcuts only apply once there is a thread open, so they never swallow typing
+                // (for example in the sign-in fields).
+                Group {
+                    ForEach(GTDBucket.allCases, id: \.self) { bucket in
+                        Button("File as \(bucket.title)") { Task { await model.fileSelected(into: bucket) } }
+                            .keyboardShortcut(KeyEquivalent(bucket.shortcut), modifiers: [])
+                    }
+                    Button("Back to Inbox") { Task { await model.unfileSelected() } }
+                        .keyboardShortcut("0", modifiers: [])
+                    Divider()
+                    Button("Accept Suggestion") { Task { await model.acceptSuggestion() } }
+                        .keyboardShortcut("a", modifiers: [])
+                    Button("Regenerate Suggestion") { model.regenerateSelected() }
+                        .keyboardShortcut("r", modifiers: [])
+                    Button("Open in Gmail") { model.openSelectedInGmail() }
+                        .keyboardShortcut("o", modifiers: [])
                 }
-                Button("Back to Inbox") { Task { await model.unfileSelected() } }
-                    .keyboardShortcut("0", modifiers: [])
+                .disabled(model.detail == nil)
                 Divider()
-                Button("Regenerate Suggestion") { model.regenerateSelected() }
-                    .keyboardShortcut("s", modifiers: .command)
+                Button("Keyboard Shortcuts") { model.shortcutsPinned.toggle() }
+                    .keyboardShortcut("/", modifiers: .command)
             }
         }
     }

@@ -67,6 +67,18 @@ final class AppModel {
     var plans: [String: ProjectPlan] = [:]
     var planning = false
 
+    // Keyboard shortcut overlay: pinned from the menu, or shown while ⌘ is held.
+    var shortcutsPinned = false
+    var shortcutsHeld = false
+    var showShortcuts: Bool { shortcutsPinned || shortcutsHeld }
+    private var holdTask: Task<Void, Never>?
+    private var flagsMonitor: Any?
+    private var keyMonitor: Any?
+
+    // Which pane has keyboard focus (mirrored from the view), and a request for the view to move it.
+    var focusedPane: Pane?
+    var focusRequest: Pane?
+
     private var client: (any MailService)?
     private var labels: LabelManager?
     private var labelIDs: [GTDBucket: String] = [:]
@@ -83,6 +95,7 @@ final class AppModel {
     }
 
     func start() async {
+        installModifierMonitor()
         if Self.launchedInDemo { await startDemo(); return }
         guard signedIn else { return }
         await connect()
@@ -189,6 +202,60 @@ final class AppModel {
             detail = thread
             autoGenerate(for: thread)
         } catch { if selection == id { self.error = error.localizedDescription } }
+    }
+
+    // MARK: - Shortcut overlay
+
+    /// Watches the modifier keys so holding ⌘ for half a second reveals the shortcut cheat-sheet.
+    private func installModifierMonitor() {
+        installKeyMonitor()
+        guard flagsMonitor == nil else { return }
+        flagsMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
+            let onlyCommand = event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command
+            MainActor.assumeIsolated { self?.commandHeld(onlyCommand) }
+            return event
+        }
+    }
+
+    /// The sidebar is an AppKit outline view that consumes the right arrow (its "expand" key) before
+    /// SwiftUI sees it, so catch that one key early and hand focus to the thread list ourselves.
+    private func installKeyMonitor() {
+        guard keyMonitor == nil else { return }
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            let rightArrow: UInt16 = 124
+            let typingModifiers: NSEvent.ModifierFlags = [.command, .option, .control, .shift]
+            guard event.keyCode == rightArrow, event.modifierFlags.intersection(typingModifiers).isEmpty else { return event }
+            let handled = MainActor.assumeIsolated { self?.moveFocusToList() ?? false }
+            return handled ? nil : event
+        }
+    }
+
+    private func moveFocusToList() -> Bool {
+        // Today has no list to move into.
+        guard focusedPane == .sidebar, folder != .today, !rows.isEmpty else { return false }
+        focusRequest = .list
+        return true
+    }
+
+    private func commandHeld(_ held: Bool) {
+        holdTask?.cancel()
+        if held {
+            holdTask = Task {
+                try? await Task.sleep(for: .milliseconds(500))
+                if !Task.isCancelled { shortcutsHeld = true }
+            }
+        } else {
+            shortcutsHeld = false
+        }
+    }
+
+    func acceptSuggestion() async {
+        guard let s = suggestion else { return }
+        await fileSelected(into: s.bucket)
+    }
+
+    func openSelectedInGmail() {
+        if let selection { openInGmail(selection) }
     }
 
     // MARK: - On-device AI
