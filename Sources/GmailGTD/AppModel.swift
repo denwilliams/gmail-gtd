@@ -78,6 +78,7 @@ final class AppModel {
 
     // Which pane has keyboard focus (mirrored from the view), and a request for the view to move it.
     var focusedPane: Pane?
+    var lastFocusedPane: Pane = .sidebar
     var focusRequest: Pane?
 
     private var client: (any MailService)?
@@ -429,6 +430,17 @@ final class AppModel {
         guard let i = rows.firstIndex(where: { $0.id == id }) else { return }
         rows.remove(at: i)
         selection = rows.indices.contains(i) ? rows[i].id : rows.last?.id
+        keepListFocus()
+    }
+
+    /// Removing the focused row makes the list drop keyboard focus. If the user was working in the list,
+    /// give it back after the list has settled, so they can keep filing with the number keys.
+    private func keepListFocus() {
+        guard lastFocusedPane == .list else { return }
+        Task {
+            try? await Task.sleep(for: .milliseconds(40))
+            focusRequest = .list
+        }
     }
 
     // MARK: - Today

@@ -66,8 +66,13 @@ struct MailView: View {
             }
         }
         .navigationTitle(model.folder.title)
-        .defaultFocus($focus, .sidebar)
-        .onChange(of: focus) { _, pane in model.focusedPane = pane }
+        // When focus is lost (for example the focused row is filed away), fall back to the pane the user
+        // was last in, not always the sidebar.
+        .defaultFocus($focus, model.lastFocusedPane)
+        .onChange(of: focus) { _, pane in
+            model.focusedPane = pane
+            if let pane { model.lastFocusedPane = pane }
+        }
         .onChange(of: model.focusRequest) { _, pane in
             guard let pane else { return }
             focus = pane
