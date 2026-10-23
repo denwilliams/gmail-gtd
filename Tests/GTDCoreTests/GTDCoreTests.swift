@@ -100,3 +100,10 @@ import Foundation
     #expect(TriageRules.bucket(whoActs: "nobody", kind: "informationOnly") == .reference)
     #expect(TriageRules.bucket(whoActs: "nobody", kind: "optionalIdea") == .someday)
 }
+
+@Test func googleErrorBodiesAreSummarised() {
+    let body = #"{"error":{"code":403,"message":"Gmail API has not been used in project 1 before or it is disabled.","errors":[{"reason":"accessNotConfigured"}]}}"#
+    let text = GmailError.http(403, body).errorDescription
+    #expect(text == "Gmail API 403: Gmail API has not been used in project 1 before or it is disabled.")
+    #expect(GmailError.http(500, "oops").errorDescription == "Gmail API 500: oops")
+}

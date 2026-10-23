@@ -261,6 +261,16 @@ final class AppModel {
         await fileSelected(into: s.bucket)
     }
 
+    /// Refresh, and retry the connection if it never came up (for example, the Gmail API was off).
+    func refresh() async {
+        if client == nil && signedIn {
+            error = nil
+            if demo { await startDemo() } else { await connect() }
+            return
+        }
+        if folder == .today { await loadToday() } else { await reload() }
+    }
+
     func openSelectedInGmail() {
         if let selection { openInGmail(selection) }
     }

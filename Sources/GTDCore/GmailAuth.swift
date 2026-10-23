@@ -10,9 +10,18 @@ public enum GmailError: Error, LocalizedError {
         case .notSignedIn: "Not signed in. Run `gtd login` or use Sign In in the app."
         case .notConfigured: "No OAuth client ID. Set GMAIL_GTD_CLIENT_ID or save one in the app/`gtd login --client-id`."
         case .auth(let m): "Auth failed: \(m)"
-        case .http(let code, let body): "Gmail API \(code): \(body)"
+        case .http(let code, let body): "Gmail API \(code): \(Self.summary(of: body))"
         case .keychain(let s): "Keychain error \(s)"
         }
+    }
+
+    /// Google error bodies are large JSON; show just the message (and the fix link when it gives one).
+    static func summary(of body: String) -> String {
+        guard let data = body.data(using: .utf8),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let error = root["error"] as? [String: Any],
+              let message = error["message"] as? String else { return String(body.prefix(300)) }
+        return message
     }
 }
 

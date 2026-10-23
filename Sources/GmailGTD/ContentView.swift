@@ -86,7 +86,7 @@ struct MailView: View {
             }
         }
         .toolbar {
-            ToolbarItem { Button("Refresh", systemImage: "arrow.clockwise") { Task { await model.folderRefresh() } } }
+            ToolbarItem { Button("Refresh", systemImage: "arrow.clockwise") { Task { await model.refresh() } } }
             ToolbarItem { Button("Sign Out") { model.signOut() } }
         }
     }
@@ -97,7 +97,12 @@ struct StatusBar: View {
 
     var body: some View {
         if let error = model.error {
-            Text(error).font(.callout).foregroundStyle(.red).padding(8).frame(maxWidth: .infinity).background(.bar)
+            HStack(alignment: .top) {
+                Text(error).font(.callout).foregroundStyle(.red).lineLimit(4).textSelection(.enabled)
+                Spacer()
+                Button("Dismiss") { model.error = nil }.buttonStyle(.link)
+            }
+            .padding(8).frame(maxWidth: .infinity).background(.bar)
         } else if let notice = model.notice {
             HStack {
                 Text(notice).font(.callout).foregroundStyle(.secondary)
@@ -109,12 +114,6 @@ struct StatusBar: View {
             Text("Demo mode: sample mail, resets on relaunch").font(.caption).foregroundStyle(.secondary)
                 .padding(6).frame(maxWidth: .infinity).background(.bar)
         }
-    }
-}
-
-extension AppModel {
-    func folderRefresh() async {
-        if folder == .today { await loadToday() } else { await reload() }
     }
 }
 
