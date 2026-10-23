@@ -160,6 +160,8 @@ struct RowView: View {
             }
         }
         .padding(.vertical, 2)
+        .onAppear { model.rowAppeared(row.id) }
+        .onDisappear { model.rowDisappeared(row.id) }
     }
 }
 
@@ -333,6 +335,8 @@ struct ProjectListView: View {
                     Text("No next action").font(.caption).foregroundStyle(.orange)
                 }
             }
+            .onAppear { model.rowAppeared(row.id) }
+            .onDisappear { model.rowDisappeared(row.id) }
             .tag(row.id)
         }
         .overlay { if model.loading && model.rows.isEmpty { ProgressView() } }

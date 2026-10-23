@@ -85,6 +85,8 @@ final class AppModel {
     // On-device AI queue: threads waiting for a suggestion or plan, top of the list first.
     private(set) var pending: [String] = []
     private(set) var inflight: Set<String> = []
+    private var visible: Set<String> = []
+    private var enqueueTask: Task<Void, Never>?
     private var workers = 0
     /// Measured on-device: two concurrent requests are ~1.3x faster than one, four add little.
     private let maxWorkers = 2
@@ -154,6 +156,7 @@ final class AppModel {
         selection = nil
         rows = []
         pending = []
+        visible = []
         if folder == .today { await loadToday() } else { await reload() }
     }
 
@@ -165,7 +168,7 @@ final class AppModel {
         do {
             rows = try await fetchRows(labelID: labelID(for: folder), max: 40)
             selectFirstIfNeeded()
-            enqueueVisible()
+            scheduleEnqueue()
             error = nil
         } catch { self.error = error.localizedDescription }
     }
@@ -284,11 +287,29 @@ final class AppModel {
         folder == .bucket(.project) ? plans[id] != nil : suggestions[id] != nil
     }
 
-    /// Queues every thread in the list that has no result yet, top to bottom, with the open thread first.
+    /// Rows currently on screen, reported by the list as they scroll in and out.
+    func rowAppeared(_ id: String) { visible.insert(id); scheduleEnqueue() }
+    func rowDisappeared(_ id: String) { visible.remove(id); scheduleEnqueue() }
+
+    /// Waits for scrolling to settle, so rows flying past never start a model run.
+    private func scheduleEnqueue() {
+        enqueueTask?.cancel()
+        enqueueTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(300))
+            guard !Task.isCancelled else { return }
+            self?.enqueueVisible()
+        }
+    }
+
+    /// Queues the on-screen threads that have no result yet, top to bottom, with the open thread first.
+    /// Anything that scrolled out of view before its turn is dropped from the queue.
     private func enqueueVisible() {
         guard aiFolder else { return }
-        var ids = rows.map(\.id).filter { !isDone($0) && !inflight.contains($0) }
-        if let selection, let i = ids.firstIndex(of: selection) { ids.remove(at: i); ids.insert(selection, at: 0) }
+        var ids = rows.map(\.id).filter { visible.contains($0) && !isDone($0) && !inflight.contains($0) }
+        if let selection, !isDone(selection), !inflight.contains(selection) {
+            ids.removeAll { $0 == selection }
+            ids.insert(selection, at: 0)
+        }
         pending = ids
         startWorkers()
     }
