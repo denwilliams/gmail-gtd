@@ -77,6 +77,14 @@ struct MailView: View {
             }
         }
         .animation(.easeOut(duration: 0.12), value: model.showShortcuts)
+        .overlay(alignment: .bottom) {
+            if let move = model.undoToast {
+                UndoToast(move: move)
+                    .padding(.bottom, 44)   // clear of the key hint bar
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
+        .animation(.easeOut(duration: 0.18), value: model.undoToast?.id)
         .safeAreaInset(edge: .bottom, spacing: 0) {
             VStack(spacing: 0) {
                 if model.folder != .today { KeyHintBar() }
@@ -108,6 +116,29 @@ extension MailView {
     }
 }
 
+/// A small, quiet confirmation of a move, with Undo. It is part of the window, never a system notification.
+struct UndoToast: View {
+    @Environment(AppModel.self) private var model
+    let move: UndoMove
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+            Text(move.summary).fontWeight(.medium)
+            Text(move.subject).foregroundStyle(.secondary).lineLimit(1)
+            Button("Undo") { Task { await model.undoLastMove() } }.buttonStyle(.link)
+            Text("\u{2318}Z").font(.caption).foregroundStyle(.secondary)
+        }
+        .font(.callout)
+        .padding(.horizontal, 14).padding(.vertical, 8)
+        .background(.regularMaterial, in: Capsule())
+        .overlay(Capsule().strokeBorder(.quaternary))
+        .shadow(color: .black.opacity(0.15), radius: 8, y: 2)
+        .frame(maxWidth: 560)
+        .accessibilityElement(children: .combine)
+    }
+}
+
 struct StatusBar: View {
     @Environment(AppModel.self) private var model
 
@@ -119,15 +150,6 @@ struct StatusBar: View {
                 Button("Dismiss") { model.error = nil }.buttonStyle(.link)
             }
             .padding(8).frame(maxWidth: .infinity).background(.bar)
-        } else if let move = model.undoToast {
-            HStack(spacing: 8) {
-                Image(systemName: "arrow.uturn.backward").foregroundStyle(.secondary)
-                Text("\(move.summary): \(move.subject)").font(.callout).lineLimit(1)
-                Spacer()
-                Button("Undo") { Task { await model.undoLastMove() } }
-                Text("\u{2318}Z").font(.caption).foregroundStyle(.secondary)
-            }
-            .padding(8).background(.bar)
         } else if let notice = model.notice {
             HStack {
                 Text(notice).font(.callout).foregroundStyle(.secondary)

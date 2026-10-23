@@ -61,8 +61,10 @@ swift run gtd process                               # walk the inbox
 
 ## Notes
 
-- Every move (filing, Done, back to Inbox) can be undone with `⌘Z`, up to the last 20, and an Undo bar appears for
-  a few seconds. Undo restores exactly the labels the thread had, and leaves unread and starred alone.
+- Moves are instant: the thread leaves the list and a small toast (not a system notification) confirms it, while
+  Gmail is updated in the background. If Gmail refuses, the thread comes back with an error. After 15 seconds of
+  inactivity the list quietly refreshes to match Gmail. Every move can be undone with `⌘Z`, up to the last 20;
+  undo restores exactly the labels the thread had, and leaves unread and starred alone.
 
 - Lists load 50 threads at a time and fetch the next page as you near the end, so you can scroll back as far
   as the folder goes (the title bar shows how many are loaded, with a `+` while there are more). Demo mail pages

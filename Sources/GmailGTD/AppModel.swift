@@ -33,7 +33,10 @@ enum Folder: Hashable, Identifiable {
 
 enum DetailTab: Hashable { case summary, original }
 
-/// A move that can be undone: where the thread's managed labels (inbox, GTD bucket) stood before it.
+enum TodayList { case nextActions, waiting }
+
+/// A move, with what is needed to take it back: the thread's inbox and GTD labels before, and the list row
+/// that was taken off the screen (and where it sat), so undo can put it back at once.
 struct UndoMove: Identifiable {
     let id = UUID()
     let threadID: String
@@ -41,6 +44,9 @@ struct UndoMove: Identifiable {
     let before: Set<String>
     let summary: String
     let origin: Folder
+    let row: ThreadRow?
+    let index: Int?
+    let todayList: TodayList?
 }
 
 struct ThreadRow: Identifiable, Hashable {
@@ -78,6 +84,9 @@ final class AppModel {
     private(set) var undoStack: [UndoMove] = []
     private(set) var undoToast: UndoMove?
     private var toastTask: Task<Void, Never>?
+    /// Gmail calls for moves run one after another, in the order the user made them.
+    private var moveChain: Task<Void, Never>?
+    private var quietRefreshTask: Task<Void, Never>?
 
     // Paging: the next page of the open folder, loaded as the user nears the end of the list.
     private(set) var nextPageToken: String?
@@ -163,7 +172,7 @@ final class AppModel {
     func signOut() {
         if !demo { TokenStore.clear() }
         demo = false; notice = nil
-        undoStack = []; undoToast = nil
+        undoStack = []; undoToast = nil; quietRefreshTask?.cancel()
         store.clear(); store = SummaryStore()   // Summaries are private: sign-out deletes them.
         signedIn = false; client = nil; cache = nil; labels = nil; email = nil
         rows = []; detail = nil; selection = nil; nextActions = []; waiting = []; digest = nil
@@ -295,6 +304,7 @@ final class AppModel {
     }
 
     private func loadDetail() async {
+        scheduleQuietRefresh()
         aiNote = nil
         guard let client, let id = selection else { detail = nil; return }
         // Show the summary straight away if there is one; otherwise the original until it is ready.
@@ -480,13 +490,8 @@ final class AppModel {
     }
 
     func fileSelected(into bucket: GTDBucket) async {
-        guard let labels, let id = selection, bucket != currentBucket else { return }   // already there
-        do {
-            let before = await labelsBefore(id)
-            try await labels.file(thread: id, into: bucket)
-            record(id, before: before, summary: "Moved to \(bucket.title)")
-            removeRow(id)
-        } catch { self.error = error.localizedDescription }
+        guard let id = selection, bucket != currentBucket else { return }   // already there
+        move(id, to: .bucket(bucket), summary: "Moved to \(bucket.title)")
     }
 
     /// Any filed thread can be marked Done, except one that already is. (Reference is the other way to be
@@ -501,74 +506,169 @@ final class AppModel {
 
     /// Marks the open thread Done (the same as ticking it on Today): it moves to `GTD/Done`.
     func finishSelected() async {
-        guard canFinish, let id = selection else { return }
+        guard canFinish else { return }
         await fileSelected(into: .done)
-        nextActions.removeAll { $0.id == id }
-        waiting.removeAll { $0.id == id }
     }
 
     func unfileSelected() async {
-        guard let labels, let id = selection else { return }
-        do {
-            let before = await labelsBefore(id)
-            try await labels.unfile(thread: id)
-            record(id, before: before, summary: "Moved back to Inbox")
-            removeRow(id)
-        } catch { self.error = error.localizedDescription }
+        guard let id = selection else { return }
+        move(id, to: .inbox, summary: "Moved back to Inbox")
     }
 
-    // MARK: - Undo
+    // MARK: - Moving threads
+    //
+    // A move happens on screen at once: the row goes, the next thread is selected and a small toast appears.
+    // The Gmail call follows in the background. If Gmail refuses, the row comes back with an error. A quiet
+    // refresh after a pause confirms the list matches Gmail.
 
-    /// What the thread's managed labels are right now, recorded before a move.
-    private func labelsBefore(_ id: String) async -> Set<String>? {
-        guard let labels, let client else { return nil }
-        let thread: GmailThread? = detail?.id == id ? detail : try? await client.thread(id)
-        let labelIDs = thread?.messages?.flatMap { $0.labelIds ?? [] } ?? []
-        return try? await labels.managedLabels(in: labelIDs)
+    private enum Destination { case bucket(GTDBucket), inbox }
+
+    private func move(_ id: String, to destination: Destination, summary: String) {
+        guard let labels else { return }
+        let before = labelsAssumedBefore(id)
+        let subject = [detail?.id == id ? detail?.messages?.last?.subject : nil,
+                       rows.first { $0.id == id }?.subject,
+                       nextActions.first { $0.id == id }?.subject,
+                       waiting.first { $0.id == id }?.subject]
+            .compactMap { $0 }.first { !$0.isEmpty } ?? "(no subject)"
+        let removed = removeLocally(id)
+        let move = UndoMove(threadID: id, subject: subject, before: before, summary: summary,
+                            origin: folder, row: removed.row, index: removed.index, todayList: removed.list)
+        remember(move)
+        enqueueRemote { [weak self] in
+            do {
+                switch destination {
+                case .bucket(let bucket): try await labels.file(thread: id, into: bucket)
+                case .inbox: try await labels.unfile(thread: id)
+                }
+            } catch { self?.moveFailed(move, error) }
+        }
+        scheduleQuietRefresh()
     }
 
-    private func record(_ id: String, before: Set<String>?, summary: String) {
-        guard let before else { return }
-        let subject = (detail?.id == id ? detail?.messages?.last?.subject : nil)
-            ?? rows.first { $0.id == id }?.subject ?? "(no subject)"
-        let move = UndoMove(threadID: id, subject: subject, before: before, summary: summary, origin: folder)
+    private func enqueueRemote(_ work: @escaping @MainActor () async -> Void) {
+        let previous = moveChain
+        moveChain = Task { await previous?.value; await work() }
+    }
+
+    /// The thread's inbox and GTD labels as far as we know without asking Gmail: from the open thread if it is
+    /// that one, otherwise from where the thread was listed.
+    private func labelsAssumedBefore(_ id: String) -> Set<String> {
+        let managed = Set(labelIDs.values).union(["INBOX"])
+        if let detail, detail.id == id {
+            return Set(detail.messages?.flatMap { $0.labelIds ?? [] } ?? []).intersection(managed)
+        }
+        if nextActions.contains(where: { $0.id == id }), let label = labelIDs[.nextAction] { return [label] }
+        if waiting.contains(where: { $0.id == id }), let label = labelIDs[.waitingFor] { return [label] }
+        switch folder {
+        case .inbox: return ["INBOX"]
+        case .bucket(let b): return labelIDs[b].map { [$0] } ?? []
+        case .today: return []
+        }
+    }
+
+    /// Takes a thread off the screen now, and selects the next one.
+    private func removeLocally(_ id: String) -> (row: ThreadRow?, index: Int?, list: TodayList?) {
+        pending.removeAll { $0 == id }   // No point summarising a thread that has just been filed.
+        var result: (row: ThreadRow?, index: Int?, list: TodayList?) = (nil, nil, nil)
+        if let i = nextActions.firstIndex(where: { $0.id == id }) {
+            let row = nextActions.remove(at: i)
+            if folder == .today { result = (row, i, .nextActions) }
+        }
+        if let i = waiting.firstIndex(where: { $0.id == id }) {
+            let row = waiting.remove(at: i)
+            if folder == .today { result = (row, i, .waiting) }
+        }
+        if folder != .today, let i = rows.firstIndex(where: { $0.id == id }) {
+            result = (rows.remove(at: i), i, nil)
+            selection = rows.indices.contains(i) ? rows[i].id : rows.last?.id
+            // Filing shrinks the list. If it is now short, no new row will scroll into view to trigger the next page.
+            if hasMore, rows.count < pageSize / 2 { Task { await loadMore() } }
+        }
+        return result
+    }
+
+    /// Puts a removed row back where it was, if we are still looking at the list it came from.
+    private func reinsertLocally(_ move: UndoMove) {
+        guard let row = move.row, let index = move.index else { return }
+        if folder == .today, let list = move.todayList {
+            switch list {
+            case .nextActions where !nextActions.contains { $0.id == row.id }: nextActions.insert(row, at: min(index, nextActions.count))
+            case .waiting where !waiting.contains { $0.id == row.id }: waiting.insert(row, at: min(index, waiting.count))
+            default: break
+            }
+        } else if folder != .today, folder == move.origin, !rows.contains(where: { $0.id == row.id }) {
+            rows.insert(row, at: min(index, rows.count))
+            selection = row.id
+        }
+    }
+
+    private func remember(_ move: UndoMove) {
         undoStack.append(move)
         if undoStack.count > 20 { undoStack.removeFirst() }
         undoToast = move
         toastTask?.cancel()
         toastTask = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(8))
+            try? await Task.sleep(for: .seconds(5))
             guard !Task.isCancelled, let self, self.undoToast?.id == move.id else { return }
-            self.undoToast = nil   // the bar goes; ⌘Z still works
+            self.undoToast = nil   // the toast goes; ⌘Z still works
         }
     }
 
-    /// Puts the most recently moved thread back where it was.
+    /// Gmail refused the move: bring the thread back and say so.
+    private func moveFailed(_ move: UndoMove, _ error: Error) {
+        undoStack.removeAll { $0.id == move.id }
+        if undoToast?.id == move.id { undoToast = nil }
+        reinsertLocally(move)
+        self.error = "Couldn\u{2019}t move \u{201C}\(move.subject)\u{201D}: \(error.localizedDescription)"
+    }
+
+    /// Puts the most recently moved thread back, on screen at once and on Gmail in the background.
     func undoLastMove() async {
         guard let move = undoStack.popLast(), let labels else { return }
         toastTask?.cancel()
         undoToast = nil
-        do {
-            try await labels.restore(thread: move.threadID, to: move.before)
-            if folder == .today {
-                await loadToday()
-            } else if folder == move.origin {
-                await reload()
-                if rows.contains(where: { $0.id == move.threadID }) { selection = move.threadID }
-            } else {
-                notice = "Put \u{201C}\(move.subject)\u{201D} back where it was"
+        reinsertLocally(move)
+        let backOnScreen = folder == .today ? move.todayList != nil : folder == move.origin
+        if !backOnScreen { notice = "Put \u{201C}\(move.subject)\u{201D} back where it was" }
+        enqueueRemote { [weak self] in
+            do { try await labels.restore(thread: move.threadID, to: move.before) } catch {
+                self?.error = "Couldn\u{2019}t undo the move of \u{201C}\(move.subject)\u{201D}: \(error.localizedDescription)"
+                await self?.refreshQuietly()
             }
-        } catch { self.error = error.localizedDescription }
+        }
+        scheduleQuietRefresh()
     }
 
-    /// Drops a processed row and moves the selection to the next one, as in an inbox-zero flow.
-    private func removeRow(_ id: String) {
-        pending.removeAll { $0 == id }   // No point summarising a thread that has just been filed.
-        guard let i = rows.firstIndex(where: { $0.id == id }) else { return }
-        rows.remove(at: i)
-        selection = rows.indices.contains(i) ? rows[i].id : rows.last?.id
-        // Filing shrinks the list. If it is now short, no new row will scroll into view to trigger the next page.
-        if hasMore, rows.count < pageSize / 2 { Task { await loadMore() } }
+    /// After a pause with no moves or browsing, make sure the list really matches Gmail.
+    private func scheduleQuietRefresh() {
+        quietRefreshTask?.cancel()
+        quietRefreshTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(15))
+            guard !Task.isCancelled else { return }
+            await self?.refreshQuietly()
+        }
+    }
+
+    func refreshQuietly() async {
+        await moveChain?.value   // let our own changes reach Gmail first
+        guard client != nil, !loading, !loadingMore else { return }
+        if folder == .today { await loadToday(); return }
+        // If the user has scrolled through several pages, replacing them would jerk the list; leave it alone.
+        guard rows.count <= pageSize + 10 else { return }
+        let openFolder = folder
+        do {
+            let page = try await fetchPage(labelID: labelID(for: openFolder), max: pageSize, hydrate: false, pageToken: nil)
+            guard folder == openFolder else { return }
+            let old = Dictionary(rows.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+            // Keep rows we already have headers for, so nothing flashes back to a placeholder.
+            rows = page.rows.map { new in old[new.id].flatMap { $0.loaded ? $0 : nil } ?? new }
+            nextPageToken = page.next
+            selectFirstIfNeeded()
+            scheduleEnqueue()
+        } catch {
+            // A failed background refresh isn't worth interrupting anyone for; the next one will try again.
+        }
     }
 
     // MARK: - Today
@@ -596,14 +696,7 @@ final class AppModel {
 
     /// Ticks off a Next Action: clears its GTD label and leaves it archived.
     func finish(_ row: ThreadRow) async {
-        guard let labels else { return }
-        do {
-            let before = await labelsBefore(row.id)
-            try await labels.file(thread: row.id, into: .done)
-            record(row.id, before: before, summary: "Marked done")
-            nextActions.removeAll { $0.id == row.id }
-            waiting.removeAll { $0.id == row.id }
-        } catch { self.error = error.localizedDescription }
+        move(row.id, to: .bucket(.done), summary: "Marked done")
     }
 
     // MARK: - Projects
