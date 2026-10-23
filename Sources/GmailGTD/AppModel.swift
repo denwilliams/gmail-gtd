@@ -33,6 +33,16 @@ enum Folder: Hashable, Identifiable {
 
 enum DetailTab: Hashable { case summary, original }
 
+/// A move that can be undone: where the thread's managed labels (inbox, GTD bucket) stood before it.
+struct UndoMove: Identifiable {
+    let id = UUID()
+    let threadID: String
+    let subject: String
+    let before: Set<String>
+    let summary: String
+    let origin: Folder
+}
+
 struct ThreadRow: Identifiable, Hashable {
     let id: String
     let subject: String
@@ -63,6 +73,11 @@ final class AppModel {
     var suggestion: TriageSuggestion? { selection.flatMap { store.suggestion(for: $0) } }
     var loading = false
     var error: String?
+
+    // Undo: the last few moves, newest last, and the one currently offered in the status bar.
+    private(set) var undoStack: [UndoMove] = []
+    private(set) var undoToast: UndoMove?
+    private var toastTask: Task<Void, Never>?
 
     // Paging: the next page of the open folder, loaded as the user nears the end of the list.
     private(set) var nextPageToken: String?
@@ -148,6 +163,7 @@ final class AppModel {
     func signOut() {
         if !demo { TokenStore.clear() }
         demo = false; notice = nil
+        undoStack = []; undoToast = nil
         store.clear(); store = SummaryStore()   // Summaries are private: sign-out deletes them.
         signedIn = false; client = nil; cache = nil; labels = nil; email = nil
         rows = []; detail = nil; selection = nil; nextActions = []; waiting = []; digest = nil
@@ -466,7 +482,9 @@ final class AppModel {
     func fileSelected(into bucket: GTDBucket) async {
         guard let labels, let id = selection, bucket != currentBucket else { return }   // already there
         do {
+            let before = await labelsBefore(id)
             try await labels.file(thread: id, into: bucket)
+            record(id, before: before, summary: "Moved to \(bucket.title)")
             removeRow(id)
         } catch { self.error = error.localizedDescription }
     }
@@ -492,8 +510,54 @@ final class AppModel {
     func unfileSelected() async {
         guard let labels, let id = selection else { return }
         do {
+            let before = await labelsBefore(id)
             try await labels.unfile(thread: id)
+            record(id, before: before, summary: "Moved back to Inbox")
             removeRow(id)
+        } catch { self.error = error.localizedDescription }
+    }
+
+    // MARK: - Undo
+
+    /// What the thread's managed labels are right now, recorded before a move.
+    private func labelsBefore(_ id: String) async -> Set<String>? {
+        guard let labels, let client else { return nil }
+        let thread: GmailThread? = detail?.id == id ? detail : try? await client.thread(id)
+        let labelIDs = thread?.messages?.flatMap { $0.labelIds ?? [] } ?? []
+        return try? await labels.managedLabels(in: labelIDs)
+    }
+
+    private func record(_ id: String, before: Set<String>?, summary: String) {
+        guard let before else { return }
+        let subject = (detail?.id == id ? detail?.messages?.last?.subject : nil)
+            ?? rows.first { $0.id == id }?.subject ?? "(no subject)"
+        let move = UndoMove(threadID: id, subject: subject, before: before, summary: summary, origin: folder)
+        undoStack.append(move)
+        if undoStack.count > 20 { undoStack.removeFirst() }
+        undoToast = move
+        toastTask?.cancel()
+        toastTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(8))
+            guard !Task.isCancelled, let self, self.undoToast?.id == move.id else { return }
+            self.undoToast = nil   // the bar goes; ⌘Z still works
+        }
+    }
+
+    /// Puts the most recently moved thread back where it was.
+    func undoLastMove() async {
+        guard let move = undoStack.popLast(), let labels else { return }
+        toastTask?.cancel()
+        undoToast = nil
+        do {
+            try await labels.restore(thread: move.threadID, to: move.before)
+            if folder == .today {
+                await loadToday()
+            } else if folder == move.origin {
+                await reload()
+                if rows.contains(where: { $0.id == move.threadID }) { selection = move.threadID }
+            } else {
+                notice = "Put \u{201C}\(move.subject)\u{201D} back where it was"
+            }
         } catch { self.error = error.localizedDescription }
     }
 
@@ -534,7 +598,9 @@ final class AppModel {
     func finish(_ row: ThreadRow) async {
         guard let labels else { return }
         do {
+            let before = await labelsBefore(row.id)
             try await labels.file(thread: row.id, into: .done)
+            record(row.id, before: before, summary: "Marked done")
             nextActions.removeAll { $0.id == row.id }
             waiting.removeAll { $0.id == row.id }
         } catch { self.error = error.localizedDescription }

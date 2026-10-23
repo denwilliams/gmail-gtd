@@ -33,6 +33,19 @@ public actor LabelManager {
         try await client.modifyThread(id, add: ["INBOX"], remove: Array(all.values))
     }
 
+    /// The labels this app manages (the inbox and every GTD bucket) among a thread's label IDs. Recorded before
+    /// a move so the move can be undone exactly.
+    public func managedLabels(in labelIDs: [String]) async throws -> Set<String> {
+        let managed = Set(try await ensureLabels().values).union(["INBOX"])
+        return Set(labelIDs).intersection(managed)
+    }
+
+    /// Sets a thread's managed labels back to a recorded set. Other labels (UNREAD, STARRED, yours) are left alone.
+    public func restore(thread id: String, to previous: Set<String>) async throws {
+        let managed = Set(try await ensureLabels().values).union(["INBOX"])
+        try await client.modifyThread(id, add: Array(previous), remove: Array(managed.subtracting(previous)))
+    }
+
     public func bucket(for labelIDs: [String]) -> GTDBucket? {
         ids.first { labelIDs.contains($0.value) }?.key
     }

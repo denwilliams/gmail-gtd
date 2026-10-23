@@ -61,6 +61,9 @@ swift run gtd process                               # walk the inbox
 
 ## Notes
 
+- Every move (filing, Done, back to Inbox) can be undone with `⌘Z`, up to the last 20, and an Undo bar appears for
+  a few seconds. Undo restores exactly the labels the thread had, and leaves unread and starred alone.
+
 - Lists load 50 threads at a time and fetch the next page as you near the end, so you can scroll back as far
   as the folder goes (the title bar shows how many are loaded, with a `+` while there are more). Demo mail pages
   in steps of 8 so you can see it happen. Today shows the 12 newest Next Actions and Waiting For, with links to the full lists.
@@ -73,4 +76,4 @@ swift run gtd process                               # walk the inbox
   context window.
 - The model runs automatically on the open inbox thread, but nothing is filed until you accept.
 - Compose and reply aren't built yet; use Open in Gmail.
-- Keys in the app: `1`-`7` file into a bucket, `0` back to inbox, `⌘1`-`⌘7` go to a bucket, `⌘0` Inbox, `⌘T` Today, `A` accept, `E` done (finished with it), `R` regenerate, `O` open in Gmail. Hold `⌘` for the full list. Suggestions generate automatically for the open inbox thread (and plans for projects); Regenerate re-runs one.
+- Keys in the app: `1`-`7` file into a bucket, `0` back to inbox, `⌘1`-`⌘7` go to a bucket, `⌘0` Inbox, `⌘T` Today, `⌘Z` undo the last move, `A` accept, `E` done (finished with it), `R` regenerate, `O` open in Gmail. Hold `⌘` for the full list. Suggestions generate automatically for the open inbox thread (and plans for projects); Regenerate re-runs one.

@@ -32,6 +32,12 @@ struct GmailGTDApp: App {
                 .task { await model.start() }
         }
         .commands {
+            // Replaces the system Undo: nothing in the mail window is editable text, and ⌘Z should take back a move.
+            CommandGroup(replacing: .undoRedo) {
+                Button(model.undoStack.last.map { "Undo \($0.summary)" } ?? "Undo") { Task { await model.undoLastMove() } }
+                    .keyboardShortcut("z", modifiers: .command)
+                    .disabled(model.undoStack.isEmpty)
+            }
             CommandMenu("Go") {
                 Group {
                     Button("Today") { model.folder = .today }

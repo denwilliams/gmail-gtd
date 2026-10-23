@@ -365,3 +365,31 @@ private let sampleSuggestion = TriageSuggestion(bucket: .nextAction, nextAction:
     #expect(list.nextPageToken == "tok123")
     #expect(list.threads?.first?.historyId == "7")
 }
+
+// MARK: - Undo
+
+@Test func restoreUndoesAMoveExactly() async throws {
+    let demo = DemoMailService()
+    let labels = LabelManager(client: demo)
+    let ids = try await labels.ensureLabels()
+
+    // From the inbox into a bucket, and back.
+    let before = try await labels.managedLabels(in: try await demo.thread("in01", full: true).messages!.last!.labelIds ?? [])
+    #expect(before == ["INBOX"])                               // UNREAD is not ours to touch
+    try await labels.file(thread: "in01", into: .someday)
+    #expect(try await demo.threadCount(labelID: "INBOX") == 19)
+    try await labels.restore(thread: "in01", to: before)
+    #expect(try await demo.threadCount(labelID: "INBOX") == 20)
+    #expect(try await demo.threadCount(labelID: ids[.someday]!) == 3)
+    let unread = try await demo.thread("in01", full: true).messages!.last!.labelIds ?? []
+    #expect(unread.contains("UNREAD"))                         // still unread: undo didn't disturb it
+
+    // From one bucket to another, and back.
+    let nextBefore = try await demo.threadCount(labelID: ids[.nextAction]!)
+    let was = try await labels.managedLabels(in: try await demo.thread("na01", full: true).messages!.last!.labelIds ?? [])
+    #expect(was == [ids[.nextAction]!])
+    try await labels.file(thread: "na01", into: .done)
+    try await labels.restore(thread: "na01", to: was)
+    #expect(try await demo.threadCount(labelID: ids[.nextAction]!) == nextBefore)
+    #expect(try await demo.threadCount(labelID: ids[.done]!) == 3)
+}

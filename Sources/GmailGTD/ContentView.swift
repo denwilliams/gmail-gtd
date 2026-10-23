@@ -119,6 +119,15 @@ struct StatusBar: View {
                 Button("Dismiss") { model.error = nil }.buttonStyle(.link)
             }
             .padding(8).frame(maxWidth: .infinity).background(.bar)
+        } else if let move = model.undoToast {
+            HStack(spacing: 8) {
+                Image(systemName: "arrow.uturn.backward").foregroundStyle(.secondary)
+                Text("\(move.summary): \(move.subject)").font(.callout).lineLimit(1)
+                Spacer()
+                Button("Undo") { Task { await model.undoLastMove() } }
+                Text("\u{2318}Z").font(.caption).foregroundStyle(.secondary)
+            }
+            .padding(8).background(.bar)
         } else if let notice = model.notice {
             HStack {
                 Text(notice).font(.callout).foregroundStyle(.secondary)
@@ -567,6 +576,7 @@ struct KeyHintBar: View {
             }
             hint(["\u{2318}", "1", "–", "7"], "go to")
             hint(["O"], "open in Gmail")
+            if !model.undoStack.isEmpty { hint(["\u{2318}", "Z"], "undo") }
             Spacer()
             Text("Hold ⌘ for all shortcuts").font(.caption).foregroundStyle(.secondary)
         }
@@ -602,6 +612,7 @@ struct ShortcutHUD: View {
                     (["E"], "Done: finished with it (same as 7)", nil),
                     (["R"], "Regenerate the suggestion", nil),
                     (["O"], "Open in Gmail", nil),
+                    (["\u{2318}", "Z"], "Undo the last move", nil),
                     (["\u{2318}", "/"], "Pin or hide this list", nil),
                 ])
             }
