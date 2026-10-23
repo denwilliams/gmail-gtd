@@ -119,7 +119,7 @@ struct TriageBar: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
                 ForEach(GTDBucket.allCases, id: \.self) { b in
-                    Button(verbatim: "\(b.shortcut) \(b.title)") { Task { await model.fileSelected(into: b) } }
+                    Button { Task { await model.fileSelected(into: b) } } label: { Text(verbatim: "\(b.shortcut) \(b.title)") }
                 }
                 Spacer()
                 Button(model.suggesting ? "Thinking…" : "Suggest", systemImage: "sparkles") {
