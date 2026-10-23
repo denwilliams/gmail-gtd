@@ -20,6 +20,17 @@ public actor GmailClient {
         return list.threads ?? []
     }
 
+    /// Approximate number of threads carrying a label (Gmail's own estimate).
+    public func threadCount(labelID: String) async throws -> Int {
+        let list: ThreadList = try await get("threads", [.init(name: "labelIds", value: labelID), .init(name: "maxResults", value: "1")])
+        return list.resultSizeEstimate ?? 0
+    }
+
+    public func emailAddress() async throws -> String {
+        let profile: GmailProfile = try await get("profile")
+        return profile.emailAddress
+    }
+
     public func thread(_ id: String, full: Bool = false) async throws -> GmailThread {
         var items = [URLQueryItem(name: "format", value: full ? "full" : "metadata")]
         if !full { items += ["Subject", "From", "Date"].map { .init(name: "metadataHeaders", value: $0) } }

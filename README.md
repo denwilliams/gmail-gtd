@@ -4,7 +4,7 @@ A native macOS Gmail client built around Getting Things Done. Google Workspace o
 Triage suggestions and summaries run on-device with Apple Foundation Models, so no mail
 content goes to a cloud model.
 
-- `GmailGTD`: SwiftUI app (inbox, GTD buckets, thread view, AI suggestions)
+- `GmailGTD`: SwiftUI app: a Today dashboard, a three-pane inbox/bucket view, a Projects section, AI suggestions, and Open in Gmail on every thread
 - `gtd`: CLI sharing the same core, including an interactive `gtd process`
 - `GTDCore`: auth, Gmail REST client, label manager, triage
 
@@ -36,4 +36,5 @@ swift run gtd process                               # walk the inbox
 - Requires macOS 26+ for Foundation Models. Threads are trimmed to fit the small on-device
   context window.
 - Suggestions are never applied automatically; accept them with a keypress.
+- Compose and reply aren't built yet; use Open in Gmail.
 - Keys in the app: `1`-`5` file into a bucket, `0` back to inbox, `⌘S` suggest.

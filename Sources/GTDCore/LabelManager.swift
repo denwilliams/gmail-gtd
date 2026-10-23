@@ -27,6 +27,12 @@ public actor LabelManager {
         try await client.modifyThread(id, add: [all[bucket]!], remove: ["INBOX"] + others)
     }
 
+    /// Marks an organised thread as done: clears its GTD labels and leaves it archived.
+    public func complete(thread id: String) async throws {
+        let all = try await ensureLabels()
+        try await client.modifyThread(id, remove: Array(all.values))
+    }
+
     /// Returns a thread to the inbox, clearing its GTD labels.
     public func unfile(thread id: String) async throws {
         let all = try await ensureLabels()

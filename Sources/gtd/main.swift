@@ -7,6 +7,8 @@ gtd: Gmail GTD from the terminal
   gtd login [--client-id ID] [--client-secret S]   Sign in via browser
   gtd logout                                       Forget stored tokens
   gtd setup                                        Create the GTD/* labels
+  gtd today                                        Next actions, waiting-for, inbox count
+  gtd open <thread-id>                             Open a thread in Gmail
   gtd inbox [N]                                    List inbox threads
   gtd list <bucket> [N]                            List a bucket
   gtd show <thread-id>                             Print a thread
@@ -93,6 +95,21 @@ func run() async throws {
         for (bucket, _) in try await labels.ensureLabels().sorted(by: { $0.key.rawValue < $1.key.rawValue }) {
             print("✓ \(bucket.labelName)")
         }
+    case "today":
+        let (client, labels) = try connect()
+        let ids = try await labels.ensureLabels()
+        print("Next Actions")
+        try await listThreads(labelID: ids[.nextAction]!, limit: 10, client: client)
+        print("\nWaiting For")
+        try await listThreads(labelID: ids[.waitingFor]!, limit: 10, client: client)
+        print("\nInbox: \(try await client.threadCount(labelID: "INBOX")) threads")
+    case "open":
+        guard let id = args.first else { fail(usage) }
+        let email = try? await connect().0.emailAddress()
+        let p = Process()
+        p.executableURL = URL(filePath: "/usr/bin/open")
+        p.arguments = [GmailLinks.thread(id, account: email).absoluteString]
+        try p.run()
     case "inbox":
         let (client, _) = try connect()
         try await listThreads(labelID: "INBOX", limit: args.first.flatMap(Int.init) ?? 20, client: client)

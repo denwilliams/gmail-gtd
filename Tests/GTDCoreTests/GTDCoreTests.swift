@@ -30,3 +30,9 @@ import Foundation
 @Test func htmlFallbackStripsTags() {
     #expect(GmailMessage.stripHTML("<style>x{}</style><p>Hi&nbsp;<b>there</b></p>") == "Hi there")
 }
+
+@Test func gmailLinksTargetThreadAndAccount() {
+    #expect(GmailLinks.thread("abc123", account: "me@example.com").absoluteString
+        == "https://mail.google.com/mail/?authuser=me@example.com#all/abc123")
+    #expect(GmailLinks.inbox(account: nil).absoluteString == "https://mail.google.com/mail/#inbox")
+}

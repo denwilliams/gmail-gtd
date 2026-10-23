@@ -16,7 +16,10 @@ public struct ThreadRef: Decodable, Sendable, Hashable, Identifiable {
 struct ThreadList: Decodable {
     let threads: [ThreadRef]?
     let nextPageToken: String?
+    let resultSizeEstimate: Int?
 }
+
+struct GmailProfile: Decodable { let emailAddress: String }
 
 public struct GmailThread: Decodable, Sendable, Identifiable {
     public let id: String

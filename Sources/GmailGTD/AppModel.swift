@@ -3,18 +3,21 @@ import AppKit
 import GTDCore
 
 enum Folder: Hashable, Identifiable {
+    case today
     case inbox
     case bucket(GTDBucket)
 
     var id: Self { self }
     var title: String {
         switch self {
+        case .today: "Today"
         case .inbox: "Inbox"
         case .bucket(let b): b.title
         }
     }
     var symbol: String {
         switch self {
+        case .today: "sun.max"
         case .inbox: "tray"
         case .bucket(.nextAction): "bolt"
         case .bucket(.waitingFor): "hourglass"
@@ -23,7 +26,7 @@ enum Folder: Hashable, Identifiable {
         case .bucket(.project): "square.stack.3d.up"
         }
     }
-    static let all: [Folder] = [.inbox] + GTDBucket.allCases.map(Folder.bucket)
+    static let mail: [Folder] = [.inbox] + GTDBucket.allCases.map(Folder.bucket)
 }
 
 struct ThreadRow: Identifiable, Hashable {
@@ -40,7 +43,7 @@ final class AppModel {
     var clientID = OAuthConfig.load()?.clientID ?? ""
     var clientSecret = OAuthConfig.load()?.clientSecret ?? ""
     var signedIn = TokenStore.load() != nil
-    var folder: Folder = .inbox { didSet { Task { await reload() } } }
+    var folder: Folder = .today { didSet { Task { await folderChanged() } } }
     var rows: [ThreadRow] = []
     var selection: String? { didSet { Task { await loadDetail() } } }
     var detail: GmailThread?
@@ -49,10 +52,24 @@ final class AppModel {
     var loading = false
     var error: String?
 
+    // Today
+    var nextActions: [ThreadRow] = []
+    var waiting: [ThreadRow] = []
+    var inboxCount = 0
+    var digest: String?
+    var digestLoading = false
+
+    // Projects
+    var plans: [String: ProjectPlan] = [:]
+    var planning = false
+
     private var client: GmailClient?
     private var labels: LabelManager?
     private var labelIDs: [GTDBucket: String] = [:]
+    private var email: String?
     private let triager = Triager()
+
+    // MARK: - Session
 
     func start() async {
         guard signedIn else { return }
@@ -73,7 +90,8 @@ final class AppModel {
 
     func signOut() {
         TokenStore.clear()
-        signedIn = false; client = nil; labels = nil; rows = []; detail = nil; selection = nil
+        signedIn = false; client = nil; labels = nil; email = nil
+        rows = []; detail = nil; selection = nil; nextActions = []; waiting = []; digest = nil
     }
 
     private func connect() async {
@@ -83,33 +101,49 @@ final class AppModel {
             let labels = LabelManager(client: client)
             labelIDs = try await labels.ensureLabels()
             self.client = client; self.labels = labels
-            await reload()
+            email = try? await client.emailAddress()
+            await folderChanged()
         } catch { self.error = error.localizedDescription }
     }
 
+    private func folderChanged() async {
+        selection = nil
+        if folder == .today { await loadToday() } else { await reload() }
+    }
+
+    // MARK: - Mail folders
+
     func reload() async {
-        guard let client else { return }
+        guard client != nil else { return }
         loading = true; defer { loading = false }
         do {
-            let labelID: String = switch folder {
-            case .inbox: "INBOX"
-            case .bucket(let b): labelIDs[b] ?? ""
-            }
-            let refs = try await client.listThreads(labelIDs: [labelID], max: 40)
-            // Fetch metadata concurrently, keeping the server's order.
-            var fetched: [String: GmailThread] = [:]
-            try await withThrowingTaskGroup(of: GmailThread.self) { group in
-                for ref in refs { group.addTask { try await client.thread(ref.id) } }
-                for try await t in group { fetched[t.id] = t }
-            }
-            rows = refs.compactMap { ref in
-                guard let t = fetched[ref.id], let last = t.messages?.last else { return nil }
-                return ThreadRow(id: t.id, subject: last.subject, from: last.from,
-                                 snippet: ref.snippet ?? "", date: last.date,
-                                 unread: t.messages?.contains { $0.isUnread } ?? false)
-            }
+            rows = try await fetchRows(labelID: labelID(for: folder), max: 40)
             error = nil
         } catch { self.error = error.localizedDescription }
+    }
+
+    private func labelID(for folder: Folder) -> String {
+        switch folder {
+        case .today, .inbox: "INBOX"
+        case .bucket(let b): labelIDs[b] ?? ""
+        }
+    }
+
+    /// Lists threads then fetches their metadata concurrently, keeping the server's order.
+    private func fetchRows(labelID: String, max: Int) async throws -> [ThreadRow] {
+        guard let client else { return [] }
+        let refs = try await client.listThreads(labelIDs: [labelID], max: max)
+        var fetched: [String: GmailThread] = [:]
+        try await withThrowingTaskGroup(of: GmailThread.self) { group in
+            for ref in refs { group.addTask { try await client.thread(ref.id) } }
+            for try await t in group { fetched[t.id] = t }
+        }
+        return refs.compactMap { ref in
+            guard let t = fetched[ref.id], let last = t.messages?.last else { return nil }
+            return ThreadRow(id: t.id, subject: last.subject, from: last.from,
+                             snippet: ref.snippet ?? "", date: last.date,
+                             unread: t.messages?.contains { $0.isUnread } ?? false)
+        }
     }
 
     private func loadDetail() async {
@@ -145,5 +179,56 @@ final class AppModel {
         guard let i = rows.firstIndex(where: { $0.id == id }) else { return }
         rows.remove(at: i)
         selection = rows.indices.contains(i) ? rows[i].id : rows.last?.id
+    }
+
+    // MARK: - Today
+
+    func loadToday() async {
+        guard let client else { return }
+        loading = true; defer { loading = false }
+        do {
+            async let next = fetchRows(labelID: labelIDs[.nextAction] ?? "", max: 12)
+            async let wait = fetchRows(labelID: labelIDs[.waitingFor] ?? "", max: 12)
+            async let count = client.threadCount(labelID: "INBOX")
+            (nextActions, waiting, inboxCount) = try await (next, wait, count)
+            error = nil
+        } catch { self.error = error.localizedDescription; return }
+        await refreshDigest()
+    }
+
+    func refreshDigest() async {
+        guard !nextActions.isEmpty || !waiting.isEmpty else { digest = nil; return }
+        digestLoading = true; defer { digestLoading = false }
+        do {
+            digest = try await triager.digest(nextActions: nextActions.map(\.subject), waitingFor: waiting.map(\.subject))
+        } catch { digest = nil }   // The digest is a nicety; the lists stand on their own.
+    }
+
+    /// Ticks off a Next Action: clears its GTD label and leaves it archived.
+    func complete(_ row: ThreadRow) async {
+        guard let labels else { return }
+        do {
+            try await labels.complete(thread: row.id)
+            nextActions.removeAll { $0.id == row.id }
+            waiting.removeAll { $0.id == row.id }
+        } catch { self.error = error.localizedDescription }
+    }
+
+    // MARK: - Projects
+
+    func planSelected() async {
+        guard let detail, let id = selection else { return }
+        planning = true; defer { planning = false }
+        do { plans[id] = try await triager.plan(for: detail) } catch { self.error = error.localizedDescription }
+    }
+
+    // MARK: - Gmail links
+
+    func openInGmail(_ threadID: String) {
+        NSWorkspace.shared.open(GmailLinks.thread(threadID, account: email))
+    }
+
+    func openGmail() {
+        NSWorkspace.shared.open(GmailLinks.inbox(account: email))
     }
 }
