@@ -35,8 +35,12 @@ struct SignInView: View {
     }
 }
 
+/// Keyboard focus targets, so left/right arrows can hop between the sidebar and the thread list.
+enum Pane: Hashable { case sidebar, list }
+
 struct MailView: View {
     @Environment(AppModel.self) private var model
+    @FocusState private var focus: Pane?
 
     var body: some View {
         @Bindable var model = model
@@ -53,14 +57,22 @@ struct MailView: View {
                 }
             }
             .navigationSplitViewColumnWidth(min: 170, ideal: 200)
+            .focused($focus, equals: .sidebar)
+            .onKeyPress(.rightArrow) {
+                // Today has no list to move into.
+                guard model.folder != .today, !model.rows.isEmpty else { return .ignored }
+                focus = .list
+                return .handled
+            }
         } detail: {
             switch model.folder {
             case .today: TodayView()
-            case .bucket(.project): HStack(spacing: 0) { ProjectListView(); Divider(); ProjectDetailView() }
-            default: HStack(spacing: 0) { ThreadListView(); Divider(); ThreadDetailView() }
+            case .bucket(.project): HStack(spacing: 0) { ProjectListView(focus: $focus); Divider(); ProjectDetailView() }
+            default: HStack(spacing: 0) { ThreadListView(focus: $focus); Divider(); ThreadDetailView() }
             }
         }
         .navigationTitle(model.folder.title)
+        .defaultFocus($focus, .sidebar)
         .safeAreaInset(edge: .bottom) {
             if let error = model.error {
                 Text(error).font(.callout).foregroundStyle(.red).padding(8).frame(maxWidth: .infinity).background(.bar)
@@ -93,6 +105,7 @@ extension AppModel {
 
 struct ThreadListView: View {
     @Environment(AppModel.self) private var model
+    var focus: FocusState<Pane?>.Binding
 
     var body: some View {
         @Bindable var model = model
@@ -101,6 +114,8 @@ struct ThreadListView: View {
         }
         .overlay { if model.loading && model.rows.isEmpty { ProgressView() } }
         .frame(width: 340)
+        .focused(focus, equals: .list)
+        .onKeyPress(.leftArrow) { focus.wrappedValue = .sidebar; return .handled }
     }
 }
 
@@ -272,6 +287,7 @@ struct TodayView: View {
 
 struct ProjectListView: View {
     @Environment(AppModel.self) private var model
+    var focus: FocusState<Pane?>.Binding
 
     var body: some View {
         @Bindable var model = model
@@ -288,6 +304,8 @@ struct ProjectListView: View {
         }
         .overlay { if model.loading && model.rows.isEmpty { ProgressView() } }
         .frame(width: 300)
+        .focused(focus, equals: .list)
+        .onKeyPress(.leftArrow) { focus.wrappedValue = .sidebar; return .handled }
     }
 }
 
