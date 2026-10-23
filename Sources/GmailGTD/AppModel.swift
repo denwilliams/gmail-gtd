@@ -30,6 +30,8 @@ enum Folder: Hashable, Identifiable {
     static let mail: [Folder] = [.inbox] + GTDBucket.allCases.map(Folder.bucket)
 }
 
+enum DetailTab: Hashable { case summary, original }
+
 struct ThreadRow: Identifiable, Hashable {
     let id: String
     let subject: String
@@ -52,9 +54,12 @@ final class AppModel {
     var rows: [ThreadRow] = []
     var selection: String? { didSet { guard selection != oldValue else { return }; Task { await loadDetail() } } }
     var detail: GmailThread?
-    var suggestions: [String: TriageSuggestion] = [:]
+    /// Summaries, plans and list headers for recent threads (LRU, kept between launches for a real mailbox).
+    var store = SummaryStore()
+    var detailTab: DetailTab = .original
+    private var tabChosenByUser = false
     var aiNote: String?   // Why the on-device model produced nothing, shown inline rather than as an error.
-    var suggestion: TriageSuggestion? { selection.flatMap { suggestions[$0] } }
+    var suggestion: TriageSuggestion? { selection.flatMap { store.suggestion(for: $0) } }
     var loading = false
     var error: String?
 
@@ -66,7 +71,6 @@ final class AppModel {
     var digestLoading = false
 
     // Projects
-    var plans: [String: ProjectPlan] = [:]
 
     // Keyboard shortcut overlay: pinned from the menu, or shown while ⌘ is held.
     var shortcutsPinned = false
@@ -122,7 +126,7 @@ final class AppModel {
         error = nil
         demo = true
         signedIn = true
-        await connect(using: DemoMailService())
+        await connect(using: DemoMailService(), persist: false)
     }
 
     func signIn() async {
@@ -140,18 +144,21 @@ final class AppModel {
     func signOut() {
         if !demo { TokenStore.clear() }
         demo = false; notice = nil
+        store.clear(); store = SummaryStore()   // Summaries are private: sign-out deletes them.
         signedIn = false; client = nil; cache = nil; labels = nil; email = nil
         rows = []; detail = nil; selection = nil; nextActions = []; waiting = []; digest = nil
     }
 
     private func connect() async {
         guard let config = OAuthConfig.load() else { error = GmailError.notConfigured.localizedDescription; return }
-        do { await connect(using: try GmailClient(auth: GmailAuth(config: config))) } catch { self.error = error.localizedDescription }
+        do { await connect(using: try GmailClient(auth: GmailAuth(config: config)), persist: true) } catch { self.error = error.localizedDescription }
     }
 
-    private func connect(using base: any MailService) async {
+    private func connect(using base: any MailService, persist: Bool) async {
         // Every read goes through the cache, so a thread is fetched once however many views want it.
         let client = CachedMailService(base)
+        // Demo mail stays in memory so it resets on relaunch; a real mailbox keeps its summaries on disk.
+        store = persist ? SummaryStore(fileURL: SummaryStore.defaultFileURL) : SummaryStore()
         do {
             let labels = LabelManager(client: client)
             labelIDs = try await labels.ensureLabels()
@@ -200,12 +207,16 @@ final class AppModel {
     private func fetchRows(labelID: String, max: Int, hydrate: Bool) async throws -> [ThreadRow] {
         guard let client else { return [] }
         let refs = try await client.listThreads(labelIDs: [labelID], max: max)
-        var result = refs.map {
-            ThreadRow(id: $0.id, subject: "", from: "", snippet: $0.snippet ?? "", date: nil, unread: false, loaded: false)
+        // A header cached against the same historyId needs no request at all.
+        var result = refs.map { ref -> ThreadRow in
+            if let h = store.header(for: ref.id, historyId: ref.historyId) {
+                return ThreadRow(id: ref.id, subject: h.subject, from: h.from, snippet: ref.snippet ?? "", date: h.date, unread: h.unread)
+            }
+            return ThreadRow(id: ref.id, subject: "", from: "", snippet: ref.snippet ?? "", date: nil, unread: false, loaded: false)
         }
         if hydrate {
-            let threads = await fetchThreads(result.map(\.id))
-            result = result.map { Self.row(for: threads[$0.id], placeholder: $0) }
+            let threads = await fetchThreads(result.filter { !$0.loaded }.map(\.id))
+            result = result.map { $0.loaded ? $0 : Self.row(for: threads[$0.id], placeholder: $0) }
         }
         return result
     }
@@ -219,11 +230,22 @@ final class AppModel {
             await withTaskGroup(of: (String, GmailThread?).self) { group in
                 for id in chunk { group.addTask { (id, try? await client.thread(id)) } }
                 for await (id, thread) in group {
-                    if let thread { result[id] = thread } else { failed.insert(id) }
+                    if let thread { result[id] = thread; note(thread) } else { failed.insert(id) }
                 }
             }
         }
         return result
+    }
+
+    /// Remembers a fetched thread's list header and checks any cached summary against its messages.
+    private func note(_ thread: GmailThread) {
+        store.note(thread, header: Self.header(of: thread))
+    }
+
+    private static func header(of thread: GmailThread) -> CachedHeader? {
+        guard let last = thread.messages?.last else { return nil }
+        return CachedHeader(from: last.from, subject: last.subject, date: last.date,
+                            unread: thread.messages?.contains { $0.isUnread } ?? false)
     }
 
     private static func row(for thread: GmailThread?, placeholder: ThreadRow) -> ThreadRow {
@@ -247,11 +269,17 @@ final class AppModel {
     private func loadDetail() async {
         aiNote = nil
         guard let client, let id = selection else { detail = nil; return }
+        // Show the summary straight away if there is one; otherwise the original until it is ready.
+        tabChosenByUser = false
+        detailTab = store.suggestion(for: id) != nil ? .summary : .original
         do {
             let thread = try await client.thread(id, full: true)
             guard selection == id else { return }   // The user has already moved on.
+            note(thread)
+            store.touch(id)
             detail = thread
             apply(thread, id: id)
+            if store.suggestion(for: id) != nil, !tabChosenByUser { detailTab = .summary }   // note() may have dropped a stale one
             if aiFolder && !isDone(id) { prioritize(id) }
         } catch { if selection == id { self.error = error.localizedDescription } }
     }
@@ -318,6 +346,11 @@ final class AppModel {
         if folder == .today { await loadToday() } else { await reload() }
     }
 
+    func chooseTab(_ tab: DetailTab) {
+        tabChosenByUser = true
+        detailTab = tab
+    }
+
     func openSelectedInGmail() {
         if let selection { openInGmail(selection) }
     }
@@ -328,7 +361,7 @@ final class AppModel {
     private var aiFolder: Bool { folder == .inbox || folder == .bucket(.project) }
 
     private func isDone(_ id: String) -> Bool {
-        folder == .bucket(.project) ? plans[id] != nil : suggestions[id] != nil
+        folder == .bucket(.project) ? store.plan(for: id) != nil : store.suggestion(for: id) != nil
     }
 
     /// Rows currently on screen, reported by the list as they scroll in and out.
@@ -388,8 +421,13 @@ final class AppModel {
         let projects = folder == .bucket(.project)
         do {
             let thread = try await client.thread(id, full: true)
-            if projects { plans[id] = try await triager.plan(for: thread) }
-            else { suggestions[id] = try await triager.suggest(for: thread, me: email) }
+            note(thread)
+            if projects { store.setPlan(try await triager.plan(for: thread), for: thread) }
+            else {
+                store.setSuggestion(try await triager.suggest(for: thread, me: email), for: thread)
+                // The summary is ready: switch to it, unless the user chose a tab themselves.
+                if id == selection && !tabChosenByUser { detailTab = .summary }
+            }
         } catch let unavailable as TriageError {
             pending.removeAll()   // The model isn't there; don't retry it for every row.
             aiNote = unavailable.localizedDescription
@@ -402,8 +440,10 @@ final class AppModel {
     /// Re-runs the model for the open thread, ignoring any cached result.
     func regenerateSelected() {
         guard let id = selection else { return }
-        if folder == .bucket(.project) { plans[id] = nil } else { suggestions[id] = nil }
+        if folder == .bucket(.project) { store.clearPlan(for: id) } else { store.clearSuggestion(for: id) }
         aiNote = nil
+        tabChosenByUser = false
+        detailTab = .original   // Back to the original while the new summary is made.
         failed.remove(id)
         prioritize(id)
     }

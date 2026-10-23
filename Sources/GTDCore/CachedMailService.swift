@@ -12,15 +12,19 @@ public actor CachedMailService: MailService {
     private var latestHistory: [String: String] = [:]
     private var lists: [String: (at: Date, refs: [ThreadRef])] = [:]
     private let listTTL: TimeInterval
+    private var recency: [String] = []   // thread ids, least recently used first
+    private let capacity: Int
 
-    public init(_ base: any MailService, listTTL: TimeInterval = 20) {
+    public init(_ base: any MailService, listTTL: TimeInterval = 20, capacity: Int = 150) {
         self.base = base
         self.listTTL = listTTL
+        self.capacity = capacity
     }
 
     /// Forget everything, so the next read goes to Gmail. Used by Refresh.
     public func invalidateAll() {
         threads = [:]
+        recency = []
         lists = [:]
         latestHistory = [:]
     }
@@ -36,14 +40,22 @@ public actor CachedMailService: MailService {
 
     /// Always fetches the full thread: it costs the same quota as metadata and serves every caller.
     public func thread(_ id: String, full: Bool) async throws -> GmailThread {
-        if let cached = threads[id], isFresh(cached) { return cached }
+        if let cached = threads[id], isFresh(cached) { touch(id); return cached }
         if let running = inFlight[id] { return try await running.value }
         let task = Task { [base] in try await base.thread(id, full: true) }
         inFlight[id] = task
         defer { inFlight[id] = nil }
         let thread = try await task.value
         threads[id] = thread
+        touch(id)
         return thread
+    }
+
+    /// Bodies are the big part of the cache, so only the most recently used are kept in memory.
+    private func touch(_ id: String) {
+        recency.removeAll { $0 == id }
+        recency.append(id)
+        while recency.count > capacity { threads[recency.removeFirst()] = nil }
     }
 
     private func isFresh(_ thread: GmailThread) -> Bool {
@@ -59,6 +71,7 @@ public actor CachedMailService: MailService {
     public func modifyThread(_ id: String, add: [String], remove: [String]) async throws {
         try await base.modifyThread(id, add: add, remove: remove)
         threads[id] = nil   // Its labels changed; any list that included it is stale too.
+        recency.removeAll { $0 == id }
         lists = [:]
     }
 }

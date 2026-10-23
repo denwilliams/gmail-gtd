@@ -86,8 +86,9 @@ public struct GmailMessage: Decodable, Sendable, Identifiable {
     /// Best-effort plain text body: prefers text/plain, falls back to tag-stripped text/html.
     public var plainText: String {
         guard let payload else { return snippet?.htmlUnescaped ?? "" }
-        if let text = Self.find("text/plain", in: payload) { return text }
-        if let html = Self.find("text/html", in: payload) { return Self.stripHTML(html) }
+        // Marketing mail often leaves HTML entities (&zwnj; padding, &amp;) inside the plain-text part too.
+        if let text = Self.find("text/plain", in: payload) { return text.htmlUnescaped.tidied }
+        if let html = Self.find("text/html", in: payload) { return Self.stripHTML(html).tidied }
         return snippet?.htmlUnescaped ?? ""
     }
 
@@ -115,11 +116,16 @@ public struct GmailMessage: Decodable, Sendable, Identifiable {
 
 extension String {
     /// Decodes the common named entities plus numeric ones (`&#39;`, `&#x27;`).
-    var htmlUnescaped: String {
+    public var htmlUnescaped: String {
         guard contains("&") else { return self }
         let named = ["&amp;": "&", "&lt;": "<", "&gt;": ">", "&quot;": "\"", "&apos;": "'", "&nbsp;": " ",
                      "&rsquo;": "\u{2019}", "&lsquo;": "\u{2018}", "&rdquo;": "\u{201D}", "&ldquo;": "\u{201C}",
-                     "&ndash;": "\u{2013}", "&mdash;": "\u{2014}", "&hellip;": "\u{2026}"]
+                     "&ndash;": "\u{2013}", "&mdash;": "\u{2014}", "&hellip;": "\u{2026}",
+                     "&zwnj;": "", "&zwj;": "", "&shy;": "", "&copy;": "\u{A9}", "&reg;": "\u{AE}", "&trade;": "\u{2122}",
+                     "&bull;": "\u{2022}", "&middot;": "\u{B7}", "&laquo;": "\u{AB}", "&raquo;": "\u{BB}",
+                     "&euro;": "\u{20AC}", "&pound;": "\u{A3}", "&cent;": "\u{A2}", "&deg;": "\u{B0}",
+                     "&times;": "\u{D7}", "&rarr;": "\u{2192}", "&larr;": "\u{2190}",
+                     "&emsp;": " ", "&ensp;": " ", "&thinsp;": " "]
         var out = ""
         var rest = self[...]
         while let amp = rest.firstIndex(of: "&") {
@@ -137,5 +143,58 @@ extension String {
             else { out.append("&"); rest = rest.dropFirst() }
         }
         return out + rest
+    }
+}
+
+
+// MARK: - Making real-world mail readable
+
+private let invisibleScalars: Set<Unicode.Scalar> = {
+    var set = Set<Unicode.Scalar>()
+    for range in [0x200B...0x200F, 0x202A...0x202E, 0x2060...0x2064] { for v in range { set.insert(Unicode.Scalar(v)!) } }
+    for v in [0xFEFF, 0x00AD, 0x034F, 0x180E] { set.insert(Unicode.Scalar(v)!) }
+    return set
+}()
+
+extension String {
+    /// Removes the zero-width and invisible characters marketing mail pads itself with, tidies each line,
+    /// and collapses runs of blank lines.
+    public var tidied: String {
+        let visible = String(String.UnicodeScalarView(unicodeScalars.filter { !invisibleScalars.contains($0) }))
+        let lines = visible.replacingOccurrences(of: "\u{A0}", with: " ")
+            .components(separatedBy: "\n")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+        return lines.joined(separator: "\n")
+            .replacingOccurrences(of: "\n{3,}", with: "\n\n", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static let urlPattern = #"https?://[^\s<>"')\]]+"#
+
+    /// Long tracking links swamp the on-device model's small context window and say nothing, so they become "[link]".
+    public var modelFriendly: String {
+        replacingOccurrences(of: Self.urlPattern, with: "[link]", options: .regularExpression)
+    }
+
+    /// For display: URLs become clickable, and long ones are shortened to their domain.
+    public var linkified: AttributedString {
+        var result = AttributedString()
+        var rest = self[...]
+        while let range = rest.range(of: Self.urlPattern, options: .regularExpression) {
+            result += AttributedString(String(rest[..<range.lowerBound]))
+            var url = String(rest[range])
+            var trailing = ""
+            while let last = url.last, ".,;:!?".contains(last) { trailing = String(last) + trailing; url.removeLast() }
+            var piece = AttributedString(url.count > 45 ? Self.shortLabel(for: url) : url)
+            piece.link = URL(string: url)
+            result += piece + AttributedString(trailing)
+            rest = rest[range.upperBound...]
+        }
+        return result + AttributedString(String(rest))
+    }
+
+    private static func shortLabel(for url: String) -> String {
+        guard let host = URL(string: url)?.host else { return "link" }
+        return host.hasPrefix("www.") ? String(host.dropFirst(4)) + " \u{2197}" : host + " \u{2197}"
     }
 }

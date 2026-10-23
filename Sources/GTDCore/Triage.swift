@@ -3,7 +3,7 @@ import Foundation
 import FoundationModels
 #endif
 
-public struct TriageSuggestion: Sendable {
+public struct TriageSuggestion: Sendable, Codable {
     public var bucket: GTDBucket
     public var nextAction: String
     public var summary: String
@@ -27,7 +27,7 @@ public enum TriageRules {
     }
 }
 
-public struct ProjectPlan: Sendable {
+public struct ProjectPlan: Sendable, Codable {
     public var summary: String
     public var steps: [String]
 }
@@ -82,7 +82,7 @@ public struct Triager: Sendable {
     // The on-device model has a small context window, so threads are trimmed hard.
     private static let maxChars = 6000
     /// Greedy decoding: the same thread always gets the same answer, so results are stable and the prompt can be tuned.
-    private static let deterministic = GenerationOptions(sampling: .greedy)
+    private static let deterministic = GenerationOptions(samplingMode: .greedy)
 
     public init() {}
 
@@ -135,7 +135,7 @@ public struct Triager: Sendable {
         var chunks: [String] = []
         let isMine = { (m: GmailMessage) in me.map { m.from.localizedCaseInsensitiveContains($0) } ?? false }
         for m in (thread.messages ?? []).reversed() {
-            let body = m.plainText.split(separator: "\n", omittingEmptySubsequences: true)
+            let body = m.plainText.modelFriendly.split(separator: "\n", omittingEmptySubsequences: true)
                 .filter { !$0.hasPrefix(">") }.joined(separator: "\n")
             let chunk = "From: \(m.from)\(isMine(m) ? " (you)" : "")\nSubject: \(m.subject)\n\(body.prefix(max(0, min(budget, 2500))))"
             budget -= chunk.count

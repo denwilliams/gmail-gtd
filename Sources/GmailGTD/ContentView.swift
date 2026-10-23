@@ -145,7 +145,7 @@ struct RowView: View {
     let row: ThreadRow
 
     var body: some View {
-        let suggestion = model.suggestions[row.id]
+        let suggestion = model.store.suggestion(for: row.id)
         VStack(alignment: .leading, spacing: 2) {
             HStack {
                 Text(row.loaded ? (row.from.components(separatedBy: " <").first ?? row.from) : "Sender name")
@@ -179,8 +179,17 @@ struct ThreadDetailView: View {
         if let thread = model.detail {
             VStack(spacing: 0) {
                 TriageBar(threadID: thread.id)
+                Picker("View", selection: Binding(get: { model.detailTab }, set: { model.chooseTab($0) })) {
+                    Text("Summary").tag(DetailTab.summary)
+                    Text("Original").tag(DetailTab.original)
+                }
+                .pickerStyle(.segmented).labelsHidden().frame(width: 220)
+                .padding(.vertical, 8)
                 Divider()
-                MessagesView(thread: thread)
+                switch model.detailTab {
+                case .summary: SummaryView(thread: thread)
+                case .original: MessagesView(thread: thread)
+                }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
@@ -200,7 +209,7 @@ struct MessagesView: View {
                     VStack(alignment: .leading, spacing: 6) {
                         Text(m.from).font(.headline)
                         if let d = m.date { Text(d.formatted()).font(.caption).foregroundStyle(.secondary) }
-                        Text(m.plainText).textSelection(.enabled)
+                        Text(m.plainText.linkified).textSelection(.enabled)
                     }
                 }
             }
@@ -234,9 +243,7 @@ struct TriageBar: View {
                 HStack(alignment: .top) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Suggested: \(s.bucket.title)").font(.headline)
-                        if !s.nextAction.isEmpty { Text("Next: \(s.nextAction)") }
-                        if let w = s.waitingOn { Text("Waiting on: \(w)") }
-                        Text(s.summary).foregroundStyle(.secondary)
+                        if !s.nextAction.isEmpty { Text("Next: \(s.nextAction)").foregroundStyle(.secondary).lineLimit(1) }
                     }
                     Spacer()
                     Button("Accept") { Task { await model.fileSelected(into: s.bucket) } }
@@ -245,6 +252,52 @@ struct TriageBar: View {
             }
         }
         .padding(10)
+    }
+}
+
+/// The on-device summary of the open thread.
+struct SummaryView: View {
+    @Environment(AppModel.self) private var model
+    let thread: GmailThread
+
+    var body: some View {
+        if let s = model.suggestion {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    Text(thread.messages?.last?.subject ?? "").font(.title2.bold())
+                    Text(s.summary).font(.title3)
+                    if !s.nextAction.isEmpty { Label("Next: \(s.nextAction)", systemImage: "arrow.right.circle") }
+                    if let w = s.waitingOn { Label("Waiting on \(w)", systemImage: "hourglass") }
+                    Label("Suggested: \(s.bucket.title)", systemImage: Folder.bucket(s.bucket).symbol)
+                        .foregroundStyle(.secondary)
+                    Text(participants).font(.caption).foregroundStyle(.secondary)
+                }
+                .padding()
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        } else if model.suggesting {
+            VStack(spacing: 10) {
+                ProgressView()
+                Text("Summarising…").foregroundStyle(.secondary)
+                Text("The original is in the other tab.").font(.caption).foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            ContentUnavailableView {
+                Label("No Summary Yet", systemImage: "sparkles")
+            } description: {
+                Text(model.aiNote ?? "Summaries are made on this Mac when you open a thread in the inbox.")
+            } actions: {
+                Button("Summarise") { model.regenerateSelected() }
+            }
+        }
+    }
+
+    private var participants: String {
+        let messages = thread.messages ?? []
+        let names = messages.map { $0.from.components(separatedBy: " <").first ?? $0.from }
+        let unique = names.reduce(into: [String]()) { if !$0.contains($1) { $0.append($1) } }
+        return "\(messages.count) message\(messages.count == 1 ? "" : "s") · \(unique.joined(separator: ", "))"
     }
 }
 
@@ -337,7 +390,7 @@ struct ProjectListView: View {
                     Spacer()
                     if model.isGenerating(row.id) { ProgressView().controlSize(.mini) }
                 }
-                if let step = model.plans[row.id]?.steps.first {
+                if let step = model.store.plan(for: row.id)?.steps.first {
                     Text("Next: \(step)").font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 } else {
                     Text("No next action").font(.caption).foregroundStyle(.orange)
@@ -369,10 +422,10 @@ struct ProjectDetailView: View {
                     Button("Open in Gmail", systemImage: "arrow.up.forward.square") { model.openInGmail(thread.id) }
                 }
                 .padding(10)
-                if let note = model.aiNote, model.plans[thread.id] == nil {
+                if let note = model.aiNote, model.store.plan(for: thread.id) == nil {
                     Text(note).font(.caption).foregroundStyle(.secondary).padding(.horizontal, 10)
                 }
-                if let plan = model.plans[thread.id] {
+                if let plan = model.store.plan(for: thread.id) {
                     GroupBox {
                         VStack(alignment: .leading, spacing: 6) {
                             Text(plan.summary).foregroundStyle(.secondary)

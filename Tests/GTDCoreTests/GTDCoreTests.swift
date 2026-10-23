@@ -189,3 +189,116 @@ actor CountingService: MailService {
     _ = try await cache.thread("in01", full: true)
     #expect(await server.threadCalls == 2)
 }
+
+// MARK: - Readable mail
+
+@Test func invisiblePaddingIsRemoved() {
+    let padded = "&zwnj; &zwj; &#8204; \u{200B}Hello\u{FEFF}  world &shy;\n\n\n\n   \nNext   "
+    let clean = padded.htmlUnescaped.tidied
+    #expect(clean == "Hello  world\n\nNext")
+}
+
+@Test func longLinksAreShortenedButStayClickable() {
+    let long = "https://click.ccg.nintendo.com/?qs=ABl7ImQiOjUwMzgsInQiOjY2MzIsInMiOjd9AAcAAAAACD8BEA7XdMRczpTEtqcG8UvgQ6hQWkNsH0NZ7ROEk"
+    let text = "Visit \(long) now. Also https://example.com/a."
+    let linked = text.linkified
+    #expect(String(linked.characters) == "Visit click.ccg.nintendo.com \u{2197} now. Also https://example.com/a.")
+    let links = linked.runs.compactMap(\.link)
+    #expect(links.count == 2)
+    #expect(links.first?.absoluteString == long)
+    #expect(links.last?.absoluteString == "https://example.com/a")   // trailing full stop is not part of the link
+}
+
+@Test func modelPromptsDropTrackingLinks() {
+    #expect("See https://click.example.com/?qs=abcdef and https://x.test/y ok".modelFriendly == "See [link] and [link] ok")
+}
+
+// MARK: - Summary cache (LRU)
+
+private func sampleThread(_ id: String, history: String? = "1", messages: Int = 1) -> GmailThread {
+    let msgs = (0..<messages).map {
+        GmailMessage(id: "\(id)-\($0)", threadId: id, labelIds: nil, snippet: nil, internalDate: nil, payload: nil)
+    }
+    return GmailThread(id: id, historyId: history, messages: msgs)
+}
+
+private let sampleSuggestion = TriageSuggestion(bucket: .nextAction, nextAction: "Do it", summary: "Summary", waitingOn: nil)
+
+@MainActor @Test func storeEvictsLeastRecentlyUsed() async throws {
+    let store = SummaryStore(capacity: 3)
+    for id in ["a", "b", "c"] {
+        store.setSuggestion(sampleSuggestion, for: sampleThread(id))
+        try await Task.sleep(for: .milliseconds(5))
+    }
+    store.touch("a")                                   // a is now the most recently used
+    try await Task.sleep(for: .milliseconds(5))
+    store.setSuggestion(sampleSuggestion, for: sampleThread("d"))
+    #expect(store.count == 3)
+    #expect(store.suggestion(for: "b") == nil)         // b was the oldest, so it went
+    #expect(store.suggestion(for: "a") != nil)
+    #expect(store.suggestion(for: "c") != nil)
+    #expect(store.suggestion(for: "d") != nil)
+}
+
+@MainActor @Test func storeHoldsFiveHundredByDefault() async throws {
+    let store = SummaryStore()
+    for i in 0..<520 { store.setSuggestion(sampleSuggestion, for: sampleThread("t\(i)")) }
+    #expect(store.count == 500)
+}
+
+@MainActor @Test func storeSurvivesARestart() async throws {
+    let file = FileManager.default.temporaryDirectory.appending(path: "gtd-store-\(UUID().uuidString).json")
+    defer { try? FileManager.default.removeItem(at: file) }
+    let first = SummaryStore(fileURL: file)
+    let thread = sampleThread("x", history: "9")
+    first.note(thread, header: CachedHeader(from: "Ann", subject: "Hi", date: nil, unread: true))
+    first.setSuggestion(sampleSuggestion, for: thread)
+    first.flush()
+
+    let second = SummaryStore(fileURL: file)
+    #expect(second.suggestion(for: "x")?.summary == "Summary")
+    #expect(second.header(for: "x", historyId: "9")?.subject == "Hi")
+    let perms = try FileManager.default.attributesOfItem(atPath: file.path)[.posixPermissions] as? Int
+    #expect(perms == 0o600)
+}
+
+@MainActor @Test func storeKeepsSummaryWhenOnlyLabelsChange() async throws {
+    let store = SummaryStore()
+    store.note(sampleThread("t", history: "1"), header: nil)
+    store.setSuggestion(sampleSuggestion, for: sampleThread("t", history: "1"))
+    store.note(sampleThread("t", history: "2"), header: nil)   // filed: Gmail's historyId moved, messages didn't
+    #expect(store.suggestion(for: "t") != nil)
+}
+
+@MainActor @Test func storeDropsSummaryWhenANewReplyArrives() async throws {
+    let store = SummaryStore()
+    store.note(sampleThread("t", history: "1", messages: 1), header: nil)
+    store.setSuggestion(sampleSuggestion, for: sampleThread("t", history: "1", messages: 1))
+    store.note(sampleThread("t", history: "2", messages: 2), header: nil)
+    #expect(store.suggestion(for: "t") == nil)
+}
+
+@MainActor @Test func cachedHeadersAreOnlyTrustedWhileGmailReportsTheSameHistory() async throws {
+    let store = SummaryStore()
+    store.note(sampleThread("t", history: "5"), header: CachedHeader(from: "Ann", subject: "Hi", date: nil, unread: false))
+    #expect(store.header(for: "t", historyId: "5")?.from == "Ann")
+    #expect(store.header(for: "t", historyId: "6") == nil)
+}
+
+@Test func threadCacheKeepsOnlyTheMostRecentBodies() async throws {
+    let server = CountingService()
+    let cache = CachedMailService(server, capacity: 2)
+    for id in ["in01", "in02", "in03"] { _ = try await cache.thread(id, full: true) }   // in01 is evicted
+    _ = try await cache.thread("in03", full: true)
+    _ = try await cache.thread("in02", full: true)
+    #expect(await server.threadCalls == 3)                    // both still cached
+    _ = try await cache.thread("in01", full: true)
+    #expect(await server.threadCalls == 4)                    // the evicted one is fetched again
+}
+
+@Test func entitiesInPlainTextPartsAreDecodedToo() async throws {
+    let t = try await DemoMailService().thread("in04", full: true)
+    let text = t.messages!.last!.plainText
+    #expect(!text.contains("&zwnj;"))
+    #expect(text.hasPrefix("View this email online"))   // the padding is gone, not just hidden
+}
