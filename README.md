@@ -36,6 +36,14 @@ scripts/make-app.sh debug      # faster, for development
 open build/GmailGTD.app --args --demo
 ```
 
+To build and install to `~/Applications` in one step (it quits a running copy first, replaces it, and launches):
+
+```sh
+scripts/install.sh               # release build, install, launch
+scripts/install.sh --no-open     # install without launching
+scripts/install.sh --debug       # faster debug build
+```
+
 The icon is drawn in code (`Sources/GmailGTD/AppIcon.swift`); the script asks the app to export it and
 turns it into an `.icns`. The bundle is ad-hoc signed, which is enough to run on this Mac. Sharing it
 with other Macs would need a Developer ID signature and notarisation.
