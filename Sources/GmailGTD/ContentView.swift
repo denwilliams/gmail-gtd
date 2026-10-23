@@ -168,11 +168,33 @@ struct RowView: View {
                 .redacted(reason: row.loaded ? [] : .placeholder)
             // The on-device summary replaces the raw snippet once it is ready.
             Text(suggestion?.headline ?? row.snippet).font(.caption).foregroundStyle(.secondary).lineLimit(2)
-            if let suggestion { BucketChip(bucket: suggestion.bucket) }
+            if let suggestion { rowTag(for: suggestion) }
         }
         .padding(.vertical, 2)
         .onAppear { model.rowAppeared(row.id) }
         .onDisappear { model.rowDisappeared(row.id) }
+    }
+}
+
+extension RowView {
+    /// The inbox shows where the model would file a thread; a bucket shows what matters inside it.
+    @ViewBuilder fileprivate func rowTag(for suggestion: TriageSuggestion) -> some View {
+        switch model.folder {
+        case .inbox:
+            BucketChip(bucket: suggestion.bucket)
+        case .bucket(.nextAction):
+            if !suggestion.nextAction.isEmpty {
+                Label(suggestion.nextAction, systemImage: "arrow.right.circle")
+                    .font(.caption.weight(.medium)).foregroundStyle(GTDBucket.nextAction.color).lineLimit(1)
+            }
+        case .bucket(.waitingFor):
+            if let who = suggestion.waitingOn {
+                Label("Waiting on \(who)", systemImage: "hourglass")
+                    .font(.caption.weight(.medium)).foregroundStyle(GTDBucket.waitingFor.color).lineLimit(1)
+            }
+        default:
+            EmptyView()
+        }
     }
 }
 
@@ -182,7 +204,7 @@ struct ThreadDetailView: View {
     var body: some View {
         if let thread = model.detail {
             VStack(spacing: 0) {
-                TriageBar(threadID: thread.id)
+                if model.folder == .inbox { TriageBar(threadID: thread.id) } else { BucketBar(threadID: thread.id) }
                 Picker("View", selection: Binding(get: { model.detailTab }, set: { model.chooseTab($0) })) {
                     Text("Summary").tag(DetailTab.summary)
                     Text("Original").tag(DetailTab.original)
@@ -220,6 +242,41 @@ struct MessagesView: View {
             .padding()
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+}
+
+/// The bar above a filed thread. The inbox is for deciding where mail goes; inside a bucket the job is
+/// to finish the thing, or move it somewhere else.
+struct BucketBar: View {
+    @Environment(AppModel.self) private var model
+    let threadID: String
+
+    var body: some View {
+        let tint = model.currentBucket?.color ?? .accentColor
+        HStack {
+            if model.canComplete {
+                Button { Task { await model.completeSelected() } } label: {
+                    Label(model.doneTitle, systemImage: "checkmark.circle")
+                }
+                .buttonStyle(.borderedProminent).tint(tint)
+            }
+            Menu {
+                ForEach(GTDBucket.allCases.filter { $0 != model.currentBucket }, id: \.self) { b in
+                    Button { Task { await model.fileSelected(into: b) } } label: { Text(verbatim: "\(b.shortcut)  \(b.title)") }
+                }
+                Divider()
+                Button("Back to Inbox") { Task { await model.unfileSelected() } }
+            } label: {
+                Label("Move to", systemImage: "arrow.turn.up.right")
+            }
+            .fixedSize()
+            Spacer()
+            if model.suggesting { ProgressView().controlSize(.small) }
+            Button("Regenerate", systemImage: "sparkles") { model.regenerateSelected() }
+                .disabled(model.suggesting)
+            Button("Open in Gmail", systemImage: "arrow.up.forward.square") { model.openInGmail(threadID) }
+        }
+        .padding(10)
     }
 }
 
@@ -421,6 +478,8 @@ struct ProjectDetailView: View {
                 HStack {
                     Text(thread.messages?.last?.subject ?? "").font(.title2.bold()).lineLimit(1)
                     Spacer()
+                    Button { Task { await model.completeSelected() } } label: { Label(model.doneTitle, systemImage: "checkmark.circle") }
+                        .buttonStyle(.borderedProminent).tint(GTDBucket.project.color)
                     if model.planning { ProgressView().controlSize(.small) }
                     Button("Regenerate", systemImage: "sparkles") { model.regenerateSelected() }
                         .disabled(model.planning)
@@ -470,12 +529,19 @@ struct Key: View {
 
 /// Always-visible one-line reminder of the main keys.
 struct KeyHintBar: View {
+    @Environment(AppModel.self) private var model
+
     var body: some View {
         HStack(spacing: 14) {
             hint(["↑", "↓"], "move")
-            hint(["1", "–", "6"], "file")
+            if model.folder == .inbox {
+                hint(["1", "–", "6"], "file")
+                hint(["A"], "accept")
+            } else {
+                if model.canComplete { hint(["D"], model.doneTitle.lowercased()) }
+                hint(["1", "–", "6"], "move to")
+            }
             hint(["\u{2318}", "1", "–", "6"], "go to")
-            hint(["A"], "accept")
             hint(["O"], "open in Gmail")
             Spacer()
             Text("Hold ⌘ for all shortcuts").font(.caption).foregroundStyle(.secondary)
@@ -508,7 +574,8 @@ struct ShortcutHUD: View {
                     (["0"], "Back to Inbox", nil),
                 ])
                 group("Thread", [
-                    (["A"], "Accept the suggestion", nil),
+                    (["A"], "Accept the suggestion (Inbox)", nil),
+                    (["D"], "Done: finish a Next Action, Waiting For or Project", nil),
                     (["R"], "Regenerate the suggestion", nil),
                     (["O"], "Open in Gmail", nil),
                     (["\u{2318}", "/"], "Pin or hide this list", nil),

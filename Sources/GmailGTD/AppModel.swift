@@ -332,7 +332,12 @@ final class AppModel {
     // MARK: - On-device AI
 
     /// Folders where the model works through the list on its own: triage in the inbox, plans in projects.
-    private var aiFolder: Bool { folder == .inbox || folder == .bucket(.project) }
+    private var aiFolder: Bool {
+        switch folder {
+        case .inbox, .bucket(.project), .bucket(.nextAction), .bucket(.waitingFor): true
+        default: false
+        }
+    }
 
     private func isDone(_ id: String) -> Bool {
         folder == .bucket(.project) ? store.plan(for: id) != nil : store.suggestion(for: id) != nil
@@ -423,9 +428,36 @@ final class AppModel {
     }
 
     func fileSelected(into bucket: GTDBucket) async {
-        guard let labels, let id = selection else { return }
+        guard let labels, let id = selection, bucket != currentBucket else { return }   // already there
         do {
             try await labels.file(thread: id, into: bucket)
+            removeRow(id)
+        } catch { self.error = error.localizedDescription }
+    }
+
+    /// Buckets whose threads can be finished: a Next Action done, a Waiting For received, a Project complete.
+    var canComplete: Bool {
+        switch folder {
+        case .bucket(.nextAction), .bucket(.waitingFor), .bucket(.project): true
+        default: false
+        }
+    }
+
+    var doneTitle: String { folder == .bucket(.waitingFor) ? "Received" : "Done" }
+
+    /// The bucket being viewed, if any.
+    var currentBucket: GTDBucket? {
+        if case .bucket(let b) = folder { return b }
+        return nil
+    }
+
+    /// Finishes the open thread: clears its GTD label and leaves it archived (the same as ticking it on Today).
+    func completeSelected() async {
+        guard canComplete, let labels, let id = selection else { return }
+        do {
+            try await labels.complete(thread: id)
+            nextActions.removeAll { $0.id == id }
+            waiting.removeAll { $0.id == id }
             removeRow(id)
         } catch { self.error = error.localizedDescription }
     }
