@@ -50,7 +50,6 @@ final class AppModel {
     var selection: String? { didSet { Task { await loadDetail() } } }
     var detail: GmailThread?
     var suggestions: [String: TriageSuggestion] = [:]
-    var suggesting = false
     var aiNote: String?   // Why the on-device model produced nothing, shown inline rather than as an error.
     var suggestion: TriageSuggestion? { selection.flatMap { suggestions[$0] } }
     var loading = false
@@ -65,7 +64,6 @@ final class AppModel {
 
     // Projects
     var plans: [String: ProjectPlan] = [:]
-    var planning = false
 
     // Keyboard shortcut overlay: pinned from the menu, or shown while ⌘ is held.
     var shortcutsPinned = false
@@ -84,8 +82,17 @@ final class AppModel {
     private var labelIDs: [GTDBucket: String] = [:]
     private var email: String?
     private let triager = Triager()
-    private var aiTask: Task<Void, Never>?
-    private var aiGeneration = 0
+    // On-device AI queue: threads waiting for a suggestion or plan, top of the list first.
+    private(set) var pending: [String] = []
+    private(set) var inflight: Set<String> = []
+    private var workers = 0
+    /// Measured on-device: two concurrent requests are ~1.3x faster than one, four add little.
+    private let maxWorkers = 2
+
+    var suggesting: Bool { folder != .bucket(.project) && isQueued(selection) }
+    var planning: Bool { folder == .bucket(.project) && isQueued(selection) }
+    func isQueued(_ id: String?) -> Bool { id.map { pending.contains($0) || inflight.contains($0) } ?? false }
+    func isGenerating(_ id: String) -> Bool { inflight.contains(id) }
 
     // MARK: - Session
 
@@ -146,6 +153,7 @@ final class AppModel {
     private func folderChanged() async {
         selection = nil
         rows = []
+        pending = []
         if folder == .today { await loadToday() } else { await reload() }
     }
 
@@ -157,6 +165,7 @@ final class AppModel {
         do {
             rows = try await fetchRows(labelID: labelID(for: folder), max: 40)
             selectFirstIfNeeded()
+            enqueueVisible()
             error = nil
         } catch { self.error = error.localizedDescription }
     }
@@ -192,15 +201,13 @@ final class AppModel {
     }
 
     private func loadDetail() async {
-        aiTask?.cancel()
-        aiGeneration += 1
-        suggesting = false; planning = false; aiNote = nil
+        aiNote = nil
         guard let client, let id = selection else { detail = nil; return }
         do {
             let thread = try await client.thread(id, full: true)
             guard selection == id else { return }   // The user has already moved on.
             detail = thread
-            autoGenerate(for: thread)
+            if aiFolder && !isDone(id) { prioritize(id) }
         } catch { if selection == id { self.error = error.localizedDescription } }
     }
 
@@ -260,40 +267,67 @@ final class AppModel {
 
     // MARK: - On-device AI
 
-    /// Triage runs on its own for inbox threads, and planning for projects. Results are cached per
-    /// thread, and a short delay lets arrow-key scrolling settle so we don't queue work for every row.
-    private func autoGenerate(for thread: GmailThread) {
-        switch folder {
-        case .inbox: if suggestions[thread.id] != nil { return }
-        case .bucket(.project): if plans[thread.id] != nil { return }
-        default: return
-        }
-        startAI(for: thread, delay: .milliseconds(250))
+    /// Folders where the model works through the list on its own: triage in the inbox, plans in projects.
+    private var aiFolder: Bool { folder == .inbox || folder == .bucket(.project) }
+
+    private func isDone(_ id: String) -> Bool {
+        folder == .bucket(.project) ? plans[id] != nil : suggestions[id] != nil
     }
 
-    private func startAI(for thread: GmailThread, delay: Duration = .zero) {
-        aiTask?.cancel()
-        aiGeneration += 1
-        let generation = aiGeneration
+    /// Queues every thread in the list that has no result yet, top to bottom, with the open thread first.
+    private func enqueueVisible() {
+        guard aiFolder else { return }
+        var ids = rows.map(\.id).filter { !isDone($0) && !inflight.contains($0) }
+        if let selection, let i = ids.firstIndex(of: selection) { ids.remove(at: i); ids.insert(selection, at: 0) }
+        pending = ids
+        startWorkers()
+    }
+
+    /// Moves a thread to the front of the queue (the one the user is looking at).
+    private func prioritize(_ id: String) {
+        pending.removeAll { $0 == id }
+        if !inflight.contains(id) { pending.insert(id, at: 0) }
+        startWorkers()
+    }
+
+    private func startWorkers() {
+        while workers < maxWorkers && !pending.isEmpty {
+            workers += 1
+            Task { await drain() }
+        }
+    }
+
+    private func drain() async {
+        defer { workers -= 1 }
+        while !pending.isEmpty {
+            guard let client else { pending.removeAll(); return }
+            let id = pending.removeFirst()
+            inflight.insert(id)
+            await process(id, using: client)
+            inflight.remove(id)
+        }
+    }
+
+    private func process(_ id: String, using client: any MailService) async {
         let projects = folder == .bucket(.project)
-        aiNote = nil
-        if projects { planning = true } else { suggesting = true }
-        aiTask = Task { [weak self] in
-            if delay > .zero { try? await Task.sleep(for: delay) }
-            guard !Task.isCancelled, let self else { return }
-            do {
-                if projects { self.plans[thread.id] = try await self.triager.plan(for: thread) }
-                else { self.suggestions[thread.id] = try await self.triager.suggest(for: thread, me: self.email) }
-            } catch is CancellationError {
-            } catch { if generation == self.aiGeneration { self.aiNote = error.localizedDescription } }
-            if generation == self.aiGeneration { self.suggesting = false; self.planning = false }
+        do {
+            let thread = try await client.thread(id, full: true)
+            if projects { plans[id] = try await triager.plan(for: thread) }
+            else { suggestions[id] = try await triager.suggest(for: thread, me: email) }
+        } catch let unavailable as TriageError {
+            pending.removeAll()   // The model isn't there; don't retry it for every row.
+            aiNote = unavailable.localizedDescription
+        } catch {
+            if id == selection { aiNote = error.localizedDescription }   // Skip this thread; carry on with the rest.
         }
     }
 
     /// Re-runs the model for the open thread, ignoring any cached result.
     func regenerateSelected() {
-        guard let detail else { return }
-        startAI(for: detail)
+        guard let id = selection else { return }
+        if folder == .bucket(.project) { plans[id] = nil } else { suggestions[id] = nil }
+        aiNote = nil
+        prioritize(id)
     }
 
     func fileSelected(into bucket: GTDBucket) async {
@@ -314,6 +348,7 @@ final class AppModel {
 
     /// Drops a processed row and moves the selection to the next one, as in an inbox-zero flow.
     private func removeRow(_ id: String) {
+        pending.removeAll { $0 == id }   // No point summarising a thread that has just been filed.
         guard let i = rows.firstIndex(where: { $0.id == id }) else { return }
         rows.remove(at: i)
         selection = rows.indices.contains(i) ? rows[i].id : rows.last?.id

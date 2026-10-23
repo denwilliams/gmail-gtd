@@ -100,6 +100,28 @@ func run() async throws {
         for (bucket, _) in try await labels.ensureLabels().sorted(by: { $0.key.rawValue < $1.key.rawValue }) {
             print("✓ \(bucket.labelName)")
         }
+    case "bench":
+        // Dev tool: is the on-device model faster with concurrent requests?
+        let (client, _) = try connect()
+        let refs = try await client.listThreads(labelIDs: ["INBOX"], max: args.first.flatMap(Int.init) ?? 8)
+        var threads: [GmailThread] = []
+        for ref in refs { threads.append(try await client.thread(ref.id, full: true)) }
+        let triager = Triager()
+        _ = try await triager.suggest(for: threads[0], me: nil)   // warm-up
+        let clock = ContinuousClock()
+        let seq = try await clock.measure { for t in threads { _ = try await triager.suggest(for: t, me: nil) } }
+        print("sequential, \(threads.count) threads: \(seq)")
+        for width in [2, 4] {
+            let par = try await clock.measure {
+                try await withThrowingTaskGroup(of: Void.self) { group in
+                    var next = 0
+                    func add() { if next < threads.count { let t = threads[next]; next += 1; group.addTask { _ = try await triager.suggest(for: t, me: nil) } } }
+                    for _ in 0..<width { add() }
+                    while try await group.next() != nil { add() }
+                }
+            }
+            print("concurrent x\(width): \(par)")
+        }
     case "today":
         let (client, labels) = try connect()
         let ids = try await labels.ensureLabels()

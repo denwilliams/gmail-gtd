@@ -137,18 +137,28 @@ struct ThreadListView: View {
 }
 
 struct RowView: View {
+    @Environment(AppModel.self) private var model
     let row: ThreadRow
 
     var body: some View {
+        let suggestion = model.suggestions[row.id]
         VStack(alignment: .leading, spacing: 2) {
             HStack {
                 Text(row.from.components(separatedBy: " <").first ?? row.from)
                     .fontWeight(row.unread ? .semibold : .regular).lineLimit(1)
                 Spacer()
+                if model.isGenerating(row.id) { ProgressView().controlSize(.mini) }
                 if let date = row.date { Text(date, style: .date).font(.caption).foregroundStyle(.secondary) }
             }
             Text(row.subject).lineLimit(1)
-            Text(row.snippet).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+            // The on-device summary replaces the raw snippet once it is ready.
+            Text(suggestion?.summary ?? row.snippet).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+            if let suggestion {
+                Text(suggestion.bucket.title)
+                    .font(.caption2.weight(.medium))
+                    .padding(.horizontal, 6).padding(.vertical, 1)
+                    .background(.quaternary, in: Capsule())
+            }
         }
         .padding(.vertical, 2)
     }
@@ -313,7 +323,11 @@ struct ProjectListView: View {
         @Bindable var model = model
         List(model.rows, selection: $model.selection) { row in
             VStack(alignment: .leading, spacing: 4) {
-                Text(row.subject).fontWeight(.semibold).lineLimit(1)
+                HStack {
+                    Text(row.subject).fontWeight(.semibold).lineLimit(1)
+                    Spacer()
+                    if model.isGenerating(row.id) { ProgressView().controlSize(.mini) }
+                }
                 if let step = model.plans[row.id]?.steps.first {
                     Text("Next: \(step)").font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 } else {
