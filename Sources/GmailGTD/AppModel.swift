@@ -128,6 +128,7 @@ final class AppModel {
 
     private func folderChanged() async {
         selection = nil
+        rows = []
         if folder == .today { await loadToday() } else { await reload() }
     }
 
@@ -138,8 +139,15 @@ final class AppModel {
         loading = true; defer { loading = false }
         do {
             rows = try await fetchRows(labelID: labelID(for: folder), max: 40)
+            selectFirstIfNeeded()
             error = nil
         } catch { self.error = error.localizedDescription }
+    }
+
+    /// Always have a thread open so the detail pane never sits empty while the list has mail.
+    private func selectFirstIfNeeded() {
+        if let selection, rows.contains(where: { $0.id == selection }) { return }
+        selection = rows.first?.id
     }
 
     private func labelID(for folder: Folder) -> String {

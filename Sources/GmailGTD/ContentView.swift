@@ -56,8 +56,8 @@ struct MailView: View {
         } detail: {
             switch model.folder {
             case .today: TodayView()
-            case .bucket(.project): HSplitView { ProjectListView(); ProjectDetailView() }
-            default: HSplitView { ThreadListView(); ThreadDetailView() }
+            case .bucket(.project): HStack(spacing: 0) { ProjectListView(); Divider(); ProjectDetailView() }
+            default: HStack(spacing: 0) { ThreadListView(); Divider(); ThreadDetailView() }
             }
         }
         .navigationTitle(model.folder.title)
@@ -100,7 +100,7 @@ struct ThreadListView: View {
             RowView(row: row).tag(row.id)
         }
         .overlay { if model.loading && model.rows.isEmpty { ProgressView() } }
-        .frame(minWidth: 280, idealWidth: 340)
+        .frame(width: 340)
     }
 }
 
@@ -132,9 +132,9 @@ struct ThreadDetailView: View {
                 Divider()
                 MessagesView(thread: thread)
             }
-            .frame(minWidth: 360)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
-            ContentUnavailableView("No Thread Selected", systemImage: "envelope").frame(minWidth: 360)
+            ContentUnavailableView("No Thread Selected", systemImage: "envelope").frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 }
@@ -287,7 +287,7 @@ struct ProjectListView: View {
             .tag(row.id)
         }
         .overlay { if model.loading && model.rows.isEmpty { ProgressView() } }
-        .frame(minWidth: 260, idealWidth: 300)
+        .frame(width: 300)
     }
 }
 
@@ -320,9 +320,9 @@ struct ProjectDetailView: View {
                 Divider().padding(.top, 10)
                 MessagesView(thread: thread)
             }
-            .frame(minWidth: 360)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
-            ContentUnavailableView("No Project Selected", systemImage: "square.stack.3d.up").frame(minWidth: 360)
+            ContentUnavailableView("No Project Selected", systemImage: "square.stack.3d.up").frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 }
