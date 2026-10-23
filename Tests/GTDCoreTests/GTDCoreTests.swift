@@ -107,3 +107,11 @@ import Foundation
     #expect(text == "Gmail API 403: Gmail API has not been used in project 1 before or it is disabled.")
     #expect(GmailError.http(500, "oops").errorDescription == "Gmail API 500: oops")
 }
+
+@Test func htmlEntitiesAreDecoded() throws {
+    #expect("they&#39;ll & it&#x27;s &amp; &quot;ok&quot; &lt;b&gt; &nbsp;x".htmlUnescaped == "they'll & it's & \"ok\" <b>  x")
+    #expect("AT&T and &unknown; and a&b".htmlUnescaped == "AT&T and &unknown; and a&b")
+    #expect("plain".htmlUnescaped == "plain")
+    let ref = try JSONDecoder().decode(ThreadRef.self, from: Data(#"{"id":"1","snippet":"Don&#39;t miss it"}"#.utf8))
+    #expect(ref.snippet == "Don't miss it")
+}

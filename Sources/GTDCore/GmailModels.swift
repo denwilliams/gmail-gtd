@@ -11,6 +11,20 @@ struct LabelList: Decodable { let labels: [GmailLabel]? }
 public struct ThreadRef: Decodable, Sendable, Hashable, Identifiable {
     public let id: String
     public let snippet: String?
+
+    public init(id: String, snippet: String?) {
+        self.id = id
+        self.snippet = snippet
+    }
+
+    private enum CodingKeys: String, CodingKey { case id, snippet }
+
+    /// Gmail sends snippets HTML-escaped (`&#39;`, `&amp;`), so decode them for display.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        snippet = try c.decodeIfPresent(String.self, forKey: .snippet)?.htmlUnescaped
+    }
 }
 
 struct ThreadList: Decodable {
@@ -53,10 +67,10 @@ public struct GmailMessage: Decodable, Sendable, Identifiable {
 
     /// Best-effort plain text body: prefers text/plain, falls back to tag-stripped text/html.
     public var plainText: String {
-        guard let payload else { return snippet ?? "" }
+        guard let payload else { return snippet?.htmlUnescaped ?? "" }
         if let text = Self.find("text/plain", in: payload) { return text }
         if let html = Self.find("text/html", in: payload) { return Self.stripHTML(html) }
-        return snippet ?? ""
+        return snippet?.htmlUnescaped ?? ""
     }
 
     private static func find(_ mime: String, in part: Part) -> String? {
@@ -74,8 +88,36 @@ public struct GmailMessage: Decodable, Sendable, Identifiable {
     static func stripHTML(_ html: String) -> String {
         html.replacingOccurrences(of: "<(style|script)[^>]*>[\\s\\S]*?</\\1>", with: " ", options: .regularExpression)
             .replacingOccurrences(of: "<[^>]+>", with: " ", options: .regularExpression)
-            .replacingOccurrences(of: "&nbsp;", with: " ")
+            .htmlUnescaped
             .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
             .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
+
+extension String {
+    /// Decodes the common named entities plus numeric ones (`&#39;`, `&#x27;`).
+    var htmlUnescaped: String {
+        guard contains("&") else { return self }
+        let named = ["&amp;": "&", "&lt;": "<", "&gt;": ">", "&quot;": "\"", "&apos;": "'", "&nbsp;": " ",
+                     "&rsquo;": "\u{2019}", "&lsquo;": "\u{2018}", "&rdquo;": "\u{201D}", "&ldquo;": "\u{201C}",
+                     "&ndash;": "\u{2013}", "&mdash;": "\u{2014}", "&hellip;": "\u{2026}"]
+        var out = ""
+        var rest = self[...]
+        while let amp = rest.firstIndex(of: "&") {
+            out += rest[..<amp]
+            rest = rest[amp...]
+            guard let semi = rest.prefix(12).firstIndex(of: ";") else { out.append("&"); rest = rest.dropFirst(); continue }
+            let entity = String(rest[...semi])
+            var replacement = named[entity.lowercased()]
+            if replacement == nil, entity.hasPrefix("&#") {
+                let digits = entity.dropFirst(2).dropLast()
+                let code = digits.first == "x" || digits.first == "X" ? UInt32(digits.dropFirst(), radix: 16) : UInt32(digits)
+                replacement = code.flatMap(Unicode.Scalar.init).map { String(Character($0)) }
+            }
+            if let replacement { out += replacement; rest = rest[rest.index(after: semi)...] }
+            else { out.append("&"); rest = rest.dropFirst() }
+        }
+        return out + rest
     }
 }
