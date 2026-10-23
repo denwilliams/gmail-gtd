@@ -67,6 +67,9 @@ public struct GmailMessage: Decodable, Sendable, Identifiable {
     }
     public var subject: String { header("Subject") ?? "(no subject)" }
     public var from: String { header("From") ?? "" }
+
+    /// Who sent it, for display: the name without quote marks, or the address when there is no name.
+    public var senderName: String { from.displayName }
     public var date: Date? { internalDate.flatMap { Double($0) }.map { Date(timeIntervalSince1970: $0 / 1000) } }
     public var isUnread: Bool { labelIds?.contains("UNREAD") ?? false }
 
@@ -196,5 +199,15 @@ extension String {
     private static func shortLabel(for url: String) -> String {
         guard let host = URL(string: url)?.host else { return "link" }
         return host.hasPrefix("www.") ? String(host.dropFirst(4)) + " \u{2197}" : host + " \u{2197}"
+    }
+}
+
+
+extension String {
+    /// "\"Ann Lee\" <ann@x.com>" becomes "Ann Lee"; a bare address stays as it is.
+    public var displayName: String {
+        let name = components(separatedBy: " <").first ?? self
+        let trimmed = name.trimmingCharacters(in: CharacterSet(charactersIn: "\"' <>"))
+        return trimmed.isEmpty ? self : trimmed
     }
 }

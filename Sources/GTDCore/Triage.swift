@@ -8,6 +8,11 @@ public struct TriageSuggestion: Sendable, Codable {
     public var nextAction: String
     public var summary: String
     public var waitingOn: String?
+
+    /// The first sentence: short enough for the list, and a complete thought on its own.
+    public var headline: String { summary.firstSentence }
+    /// The rest of the summary, for the detail view.
+    public var details: String { String(summary.dropFirst(headline.count)).trimmingCharacters(in: .whitespacesAndNewlines) }
 }
 
 /// Maps the model's answers to a GTD bucket. Plain strings so it works, and is testable, without the model.
@@ -30,6 +35,9 @@ public enum TriageRules {
 public struct ProjectPlan: Sendable, Codable {
     public var summary: String
     public var steps: [String]
+
+    public var headline: String { summary.firstSentence }
+    public var details: String { String(summary.dropFirst(headline.count)).trimmingCharacters(in: .whitespacesAndNewlines) }
 }
 
 public enum TriageError: Error, LocalizedError {
@@ -55,6 +63,8 @@ enum ThreadKind: String {
 /// Small questions the on-device model answers reliably. The bucket itself is chosen in code (`TriageRules`).
 @Generable
 struct GeneratedTriage {
+    /// Scratch space: thinking in a sentence or two first measurably improves the answers below. It is
+    /// discarded; the summary people read comes from a separate request (`GeneratedSummary`).
     @Guide(description: "One or two sentences summarising the thread.")
     var summary: String
     @Guide(description: "True only if the last message directly asks, instructs or expects the user to do, decide, answer or approve something. False for announcements, notices, alerts, receipts, newsletters and updates.")
@@ -69,9 +79,17 @@ struct GeneratedTriage {
     var waitingOn: String
 }
 
+/// The summary people read. Made by its own request so it can be long and fluent without nudging the
+/// classification, which a small model otherwise lets its own wording steer.
+@Generable
+struct GeneratedSummary {
+    @Guide(description: "A summary of three to five sentences. The first sentence must make sense on its own as a headline, under 20 words. The next sentences add the key details: who is involved, dates, amounts, and what is being asked or announced.")
+    var summary: String
+}
+
 @Generable
 struct GeneratedPlan {
-    @Guide(description: "One or two sentences on what this project is.")
+    @Guide(description: "Three or four sentences on what this project is, its current state and what is outstanding. The first sentence must make sense on its own as a headline, under 20 words.")
     var summary: String
     @Guide(description: "Two to five concrete steps, each starting with a verb, under 12 words.")
     var steps: [String]
@@ -91,22 +109,38 @@ public struct Triager: Sendable {
         guard case .available = model.availability else {
             throw TriageError.modelUnavailable(String(describing: model.availability))
         }
+        // Two independent requests, run together: the pair finishes in roughly 1.2x one request, not 2x.
+        async let classification = Self.classify(thread, me: me)
+        async let summary = Self.summarise(thread, me: me)
+        let (t, longSummary) = try await (classification, summary)
+        let bucket = TriageRules.bucket(whoActs: t.whoActs.rawValue, kind: t.kind.rawValue, asksUser: t.asksUser)
+        return TriageSuggestion(
+            bucket: bucket,
+            nextAction: bucket == .nextAction || bucket == .project ? t.nextAction : "",
+            summary: longSummary,
+            waitingOn: bucket == .waitingFor && !t.waitingOn.isEmpty ? t.waitingOn : nil)
+    }
+
+    private static func classify(_ thread: GmailThread, me: String?) async throws -> GeneratedTriage {
         let session = LanguageModelSession(instructions: """
             You read email for someone using Getting Things Done. Messages marked (you) were written \
             by the user. Work out who has the next move and what kind of thread it is. If the last \
             message was written by someone else and asks the user for anything, the user must act.
             """)
-        let result = try await session.respond(to: Self.prompt(for: thread, me: me), generating: GeneratedTriage.self, options: Self.deterministic)
-        let t = result.content
-        let bucket = TriageRules.bucket(whoActs: t.whoActs.rawValue, kind: t.kind.rawValue, asksUser: t.asksUser)
-        return TriageSuggestion(
-            bucket: bucket,
-            nextAction: bucket == .nextAction || bucket == .project ? t.nextAction : "",
-            summary: t.summary,
-            waitingOn: bucket == .waitingFor && !t.waitingOn.isEmpty ? t.waitingOn : nil)
+        return try await session.respond(to: prompt(for: thread, me: me), generating: GeneratedTriage.self, options: deterministic).content
     }
 
-    /// Short digest of what needs attention, built from already-fetched subjects and snippets.
+    private static func summarise(_ thread: GmailThread, me: String?) async throws -> String {
+        let session = LanguageModelSession(instructions: """
+            You summarise email for the person who received it. Messages marked (you) were written by \
+            that person. Use only facts stated in the email: never guess or invent dates, names or numbers, \
+            and do not mention when the email was sent. Name only people who appear in the From lines or \
+            the text. Describe what the email says; do not give advice and do not say whether anything needs doing.
+            """)
+        let prompt = "Summarise this email thread (newest message first).\n\n" + transcript(for: thread, me: me)
+        return try await session.respond(to: prompt, generating: GeneratedSummary.self, options: deterministic).content.summary
+    }
+
     public func digest(nextActions: [String], waitingFor: [String]) async throws -> String {
         let model = SystemLanguageModel.default
         guard case .available = model.availability else {
@@ -129,8 +163,9 @@ public struct Triager: Sendable {
         return ProjectPlan(summary: r.content.summary, steps: r.content.steps)
     }
 
-    static func prompt(for thread: GmailThread, me: String? = nil) -> String {
-        // Newest messages first, quoted replies dropped, until the budget is spent.
+    /// The thread as plain text for the model: newest first, quoted replies and tracking links dropped,
+    /// trimmed to fit its small context window.
+    static func transcript(for thread: GmailThread, me: String?) -> String {
         var budget = maxChars
         var chunks: [String] = []
         let isMine = { (m: GmailMessage) in me.map { m.from.localizedCaseInsensitiveContains($0) } ?? false }
@@ -142,6 +177,11 @@ public struct Triager: Sendable {
             chunks.append(chunk)
             if budget <= 0 { break }
         }
+        return chunks.joined(separator: "\n---\n")
+    }
+
+    static func prompt(for thread: GmailThread, me: String? = nil) -> String {
+        let isMine = { (m: GmailMessage) in me.map { m.from.localizedCaseInsensitiveContains($0) } ?? false }
         let lastBy = thread.messages?.last.map { isMine($0) ? "the user" : "someone else" } ?? "unknown"
         // Only an unsubscribe header or bulk precedence is mentioned. A no-reply sender is left out on
         // purpose: receipts, bookings and confirmations come from those too, and hinting at it made the
@@ -149,7 +189,7 @@ public struct Triager: Sendable {
         let strong = (thread.messages?.last?.bulkSignals ?? []).filter { !$0.contains("no-reply") }
         let signalLine = strong.isEmpty ? "" : " The last message \(strong.joined(separator: " and ")), so it is probably automated or bulk mail."
         return "Triage this email thread (newest message first). The last message was sent by \(lastBy).\(signalLine)\n\n"
-            + chunks.joined(separator: "\n---\n")
+            + transcript(for: thread, me: me)
     }
 }
 
@@ -169,3 +209,16 @@ public struct Triager: Sendable {
 }
 
 #endif
+
+
+extension String {
+    /// The first sentence, using Foundation's sentence segmentation (it copes with "$2.50" and "Dr.").
+    public var firstSentence: String {
+        var first: String?
+        enumerateSubstrings(in: startIndex..., options: .bySentences) { sentence, _, _, stop in
+            first = sentence?.trimmingCharacters(in: .whitespacesAndNewlines)
+            stop = true
+        }
+        return first ?? self
+    }
+}

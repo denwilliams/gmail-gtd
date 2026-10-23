@@ -55,7 +55,7 @@ func connect() throws -> (any MailService, LabelManager) {
 
 func line(_ t: GmailThread, bucket: GTDBucket? = nil) -> String {
     guard let m = t.messages?.last else { return t.id }
-    let from = m.from.components(separatedBy: " <").first ?? m.from
+    let from = m.senderName
     let flag = (t.messages?.contains { $0.isUnread } ?? false) ? "●" : " "
     let tag = bucket.map { " [\($0.title)]" } ?? ""
     return "\(flag) \(t.id)  \(from.prefix(24).padding(toLength: 24, withPad: " ", startingAt: 0))  \(m.subject.prefix(60))\(tag)"

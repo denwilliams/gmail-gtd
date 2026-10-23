@@ -24,6 +24,20 @@ struct GmailGTDApp: App {
                 .task { await model.start() }
         }
         .commands {
+            CommandMenu("Go") {
+                Group {
+                    Button("Today") { model.folder = .today }
+                        .keyboardShortcut("0", modifiers: .command)
+                    Button("Inbox") { model.folder = .inbox }
+                        .keyboardShortcut("7", modifiers: .command)
+                    Divider()
+                    ForEach(GTDBucket.allCases, id: \.self) { bucket in
+                        Button(bucket.title) { model.folder = .bucket(bucket) }
+                            .keyboardShortcut(KeyEquivalent(bucket.shortcut), modifiers: .command)
+                    }
+                }
+                .disabled(!model.signedIn)
+            }
             CommandMenu("Triage") {
                 // Plain-key shortcuts only apply once there is a thread open, so they never swallow typing
                 // (for example in the sign-in fields).

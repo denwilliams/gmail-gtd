@@ -302,3 +302,22 @@ private let sampleSuggestion = TriageSuggestion(bucket: .nextAction, nextAction:
     #expect(!text.contains("&zwnj;"))
     #expect(text.hasPrefix("View this email online"))   // the padding is gone, not just hidden
 }
+
+// MARK: - Summaries and names
+
+@Test func summaryHeadlineIsTheFirstSentence() {
+    let s = TriageSuggestion(bucket: .reference, nextAction: "",
+        summary: "PayPal explains a new trusted device feature. It allows passwordless sign-in costing $2.50 a month. Dr. Lee approved it on 3 May.", waitingOn: nil)
+    #expect(s.headline == "PayPal explains a new trusted device feature.")
+    #expect(s.details == "It allows passwordless sign-in costing $2.50 a month. Dr. Lee approved it on 3 May.")
+    let one = TriageSuggestion(bucket: .reference, nextAction: "", summary: "Just one sentence", waitingOn: nil)
+    #expect(one.headline == "Just one sentence")
+    #expect(one.details == "")
+}
+
+@Test func senderNamesLoseTheirQuotes() {
+    #expect("\"Ann Lee\" <ann@x.com>".displayName == "Ann Lee")
+    #expect("\"service@paypal.com.au\" <service@paypal.com.au>".displayName == "service@paypal.com.au")
+    #expect("ann@x.com".displayName == "ann@x.com")
+    #expect("Ann Lee <ann@x.com>".displayName == "Ann Lee")
+}

@@ -46,13 +46,13 @@ struct MailView: View {
         @Bindable var model = model
         NavigationSplitView {
             List(selection: $model.folder) {
-                Label("Today", systemImage: Folder.today.symbol).tag(Folder.today)
+                sidebarRow("Today", Folder.today.symbol, .yellow, hint: "\u{2318}0").tag(Folder.today)
                 Section("Process") {
-                    Label("Inbox", systemImage: Folder.inbox.symbol).tag(Folder.inbox)
+                    sidebarRow("Inbox", Folder.inbox.symbol, .accentColor, hint: "\u{2318}7").tag(Folder.inbox)
                 }
                 Section("GTD") {
                     ForEach(GTDBucket.allCases, id: \.self) { b in
-                        Label(b.title, systemImage: Folder.bucket(b).symbol).tag(Folder.bucket(b))
+                        sidebarRow(b.title, Folder.bucket(b).symbol, b.color, hint: "\u{2318}\(b.shortcut)").tag(Folder.bucket(b))
                     }
                 }
             }
@@ -93,6 +93,17 @@ struct MailView: View {
         .toolbar {
             ToolbarItem { Button("Refresh", systemImage: "arrow.clockwise") { Task { await model.refresh() } } }
             ToolbarItem { Button("Sign Out") { model.signOut() } }
+        }
+    }
+}
+
+extension MailView {
+    /// A sidebar row with a coloured icon and its ⌘ shortcut on the right.
+    fileprivate func sidebarRow(_ title: String, _ symbol: String, _ color: Color, hint: String) -> some View {
+        HStack {
+            Label { Text(title) } icon: { Image(systemName: symbol).foregroundStyle(color) }
+            Spacer()
+            Text(hint).font(.caption).foregroundStyle(.secondary)
         }
     }
 }
@@ -148,7 +159,7 @@ struct RowView: View {
         let suggestion = model.store.suggestion(for: row.id)
         VStack(alignment: .leading, spacing: 2) {
             HStack {
-                Text(row.loaded ? (row.from.components(separatedBy: " <").first ?? row.from) : "Sender name")
+                Text(row.loaded ? row.from.displayName : "Sender name")
                     .fontWeight(row.unread ? .semibold : .regular).lineLimit(1)
                     .redacted(reason: row.loaded ? [] : .placeholder)
                 Spacer()
@@ -158,13 +169,8 @@ struct RowView: View {
             Text(row.loaded ? row.subject : "Subject line").lineLimit(1)
                 .redacted(reason: row.loaded ? [] : .placeholder)
             // The on-device summary replaces the raw snippet once it is ready.
-            Text(suggestion?.summary ?? row.snippet).font(.caption).foregroundStyle(.secondary).lineLimit(2)
-            if let suggestion {
-                Text(suggestion.bucket.title)
-                    .font(.caption2.weight(.medium))
-                    .padding(.horizontal, 6).padding(.vertical, 1)
-                    .background(.quaternary, in: Capsule())
-            }
+            Text(suggestion?.headline ?? row.snippet).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+            if let suggestion { BucketChip(bucket: suggestion.bucket) }
         }
         .padding(.vertical, 2)
         .onAppear { model.rowAppeared(row.id) }
@@ -228,6 +234,7 @@ struct TriageBar: View {
             HStack {
                 ForEach(GTDBucket.allCases, id: \.self) { b in
                     Button { Task { await model.fileSelected(into: b) } } label: { Text(verbatim: "\(b.shortcut) \(b.title)") }
+                        .buttonStyle(BucketButtonStyle(color: b.color))
                 }
                 Spacer()
                 Button("Regenerate", systemImage: "sparkles") { model.regenerateSelected() }
@@ -242,12 +249,12 @@ struct TriageBar: View {
             if let s = model.suggestion {
                 HStack(alignment: .top) {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("Suggested: \(s.bucket.title)").font(.headline)
+                        Text("Suggested: \(s.bucket.title)").font(.headline).foregroundStyle(s.bucket.color)
                         if !s.nextAction.isEmpty { Text("Next: \(s.nextAction)").foregroundStyle(.secondary).lineLimit(1) }
                     }
                     Spacer()
                     Button("Accept") { Task { await model.fileSelected(into: s.bucket) } }
-                        .buttonStyle(.borderedProminent)
+                        .buttonStyle(.borderedProminent).tint(s.bucket.color)
                 }
             }
         }
@@ -265,11 +272,12 @@ struct SummaryView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     Text(thread.messages?.last?.subject ?? "").font(.title2.bold())
-                    Text(s.summary).font(.title3)
+                    Text(s.headline).font(.title3.weight(.semibold))
+                    if !s.details.isEmpty { Text(s.details).font(.body).lineSpacing(3) }
                     if !s.nextAction.isEmpty { Label("Next: \(s.nextAction)", systemImage: "arrow.right.circle") }
                     if let w = s.waitingOn { Label("Waiting on \(w)", systemImage: "hourglass") }
                     Label("Suggested: \(s.bucket.title)", systemImage: Folder.bucket(s.bucket).symbol)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(s.bucket.color)
                     Text(participants).font(.caption).foregroundStyle(.secondary)
                 }
                 .padding()
@@ -295,7 +303,7 @@ struct SummaryView: View {
 
     private var participants: String {
         let messages = thread.messages ?? []
-        let names = messages.map { $0.from.components(separatedBy: " <").first ?? $0.from }
+        let names = messages.map(\.senderName)
         let unique = names.reduce(into: [String]()) { if !$0.contains($1) { $0.append($1) } }
         return "\(messages.count) message\(messages.count == 1 ? "" : "s") · \(unique.joined(separator: ", "))"
     }
@@ -335,7 +343,7 @@ struct TodayView: View {
                                         .buttonStyle(.plain).help("Mark done")
                                     Text(row.subject).lineLimit(1)
                                     Spacer()
-                                    Text(row.from.components(separatedBy: " <").first ?? row.from)
+                                    Text(row.from.displayName)
                                         .font(.caption).foregroundStyle(.secondary).lineLimit(1)
                                     Button { model.openInGmail(row.id) } label: { Image(systemName: "arrow.up.forward.square") }
                                         .buttonStyle(.plain).help("Open in Gmail")
@@ -470,6 +478,7 @@ struct KeyHintBar: View {
             hint(["↑", "↓"], "move")
             hint(["←", "→"], "switch pane")
             hint(["1", "–", "6"], "file")
+            hint(["\u{2318}", "1", "–", "6"], "go to")
             hint(["A"], "accept")
             hint(["O"], "open in Gmail")
             Spacer()
@@ -495,17 +504,19 @@ struct ShortcutHUD: View {
             Text("Keyboard Shortcuts").font(.title3.bold())
             HStack(alignment: .top, spacing: 36) {
                 group("Navigate", [
-                    (["↑", "↓"], "Move through categories or threads"),
-                    (["←", "→"], "Switch between categories and threads"),
-                ])
-                group("File the open thread", GTDBucket.allCases.map { ([String($0.shortcut)], $0.title) } + [
-                    (["0"], "Back to Inbox"),
+                    (["↑", "↓"], "Move through categories or threads", nil),
+                    (["←", "→"], "Switch between categories and threads", nil),
+                    (["\u{2318}", "0"], "Today", nil),
+                    (["\u{2318}", "7"], "Inbox", nil),
+                ] + GTDBucket.allCases.map { (["\u{2318}", String($0.shortcut)], "Go to \($0.title)", $0.color) })
+                group("File the open thread", GTDBucket.allCases.map { ([String($0.shortcut)], $0.title, $0.color) } + [
+                    (["0"], "Back to Inbox", nil),
                 ])
                 group("Thread", [
-                    (["A"], "Accept the suggestion"),
-                    (["R"], "Regenerate the suggestion"),
-                    (["O"], "Open in Gmail"),
-                    (["⌘", "/"], "Pin or hide this list"),
+                    (["A"], "Accept the suggestion", nil),
+                    (["R"], "Regenerate the suggestion", nil),
+                    (["O"], "Open in Gmail", nil),
+                    (["\u{2318}", "/"], "Pin or hide this list", nil),
                 ])
             }
         }
@@ -515,13 +526,14 @@ struct ShortcutHUD: View {
         .padding(40)
     }
 
-    private func group(_ title: String, _ rows: [([String], String)]) -> some View {
+    private func group(_ title: String, _ rows: [([String], String, Color?)]) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(title).font(.headline)
             ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
                 HStack(spacing: 8) {
                     HStack(spacing: 3) { ForEach(Array(row.0.enumerated()), id: \.offset) { _, k in Key(k) } }
-                        .frame(width: 56, alignment: .leading)
+                        .frame(width: 64, alignment: .leading)
+                    if let color = row.2 { Circle().fill(color).frame(width: 8, height: 8) }
                     Text(row.1)
                 }
             }

@@ -100,7 +100,7 @@ final class AppModel {
     private var enqueueTask: Task<Void, Never>?
     private var workers = 0
     /// Measured on-device: two concurrent requests are ~1.3x faster than one, four add little.
-    private let maxWorkers = 2
+    private let maxWorkers = 1   // each suggestion is already two concurrent model requests
 
     var suggesting: Bool { folder != .bucket(.project) && isQueued(selection) }
     var planning: Bool { folder == .bucket(.project) && isQueued(selection) }
