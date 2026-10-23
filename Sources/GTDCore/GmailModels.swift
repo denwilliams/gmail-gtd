@@ -39,6 +39,17 @@ struct ThreadList: Decodable {
 
 struct GmailProfile: Decodable { let emailAddress: String }
 
+/// One page of a thread listing. Pass `nextPageToken` back to get the next page; nil means the end.
+public struct ThreadPage: Sendable {
+    public let refs: [ThreadRef]
+    public let nextPageToken: String?
+
+    public init(refs: [ThreadRef], nextPageToken: String?) {
+        self.refs = refs
+        self.nextPageToken = nextPageToken
+    }
+}
+
 public struct GmailThread: Decodable, Sendable, Identifiable {
     public let id: String
     public let historyId: String?

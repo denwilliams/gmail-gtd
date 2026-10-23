@@ -39,12 +39,15 @@ public actor DemoMailService: MailService {
 
     // MARK: - MailService
 
-    public func listThreads(labelIDs: [String], query: String?, max: Int) async throws -> [ThreadRef] {
-        threads.values
+    /// Pages by offset: the token is the index of the next thread.
+    public func listThreadPage(labelIDs: [String], query: String?, max: Int, pageToken: String?) async throws -> ThreadPage {
+        let all = threads.values
             .filter { t in labelIDs.allSatisfy(t.labels.contains) }
             .sorted { $0.messages.last!.hoursAgo < $1.messages.last!.hoursAgo }
-            .prefix(max)
-            .map { ThreadRef(id: $0.id, snippet: Self.snippet($0.messages.last!.body)) }
+        let start = pageToken.flatMap(Int.init) ?? 0
+        let slice = all.dropFirst(start).prefix(max)
+        let next = start + slice.count < all.count ? String(start + slice.count) : nil
+        return ThreadPage(refs: slice.map { ThreadRef(id: $0.id, snippet: Self.snippet($0.messages.last!.body)) }, nextPageToken: next)
     }
 
     public func thread(_ id: String, full: Bool) async throws -> GmailThread {

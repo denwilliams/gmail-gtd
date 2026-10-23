@@ -132,10 +132,11 @@ actor CountingService: MailService {
     var threadCalls = 0, listCalls = 0
     var historyID = "1"
 
-    func listThreads(labelIDs: [String], query: String?, max: Int) async throws -> [ThreadRef] {
+    func listThreadPage(labelIDs: [String], query: String?, max: Int, pageToken: String?) async throws -> ThreadPage {
         listCalls += 1
-        let refs = try await inner.listThreads(labelIDs: labelIDs, query: query, max: max)
-        return refs.map { ThreadRef(id: $0.id, snippet: $0.snippet, historyId: historyID) }
+        let page = try await inner.listThreadPage(labelIDs: labelIDs, query: query, max: max, pageToken: pageToken)
+        return ThreadPage(refs: page.refs.map { ThreadRef(id: $0.id, snippet: $0.snippet, historyId: historyID) },
+                          nextPageToken: page.nextPageToken)
     }
     func thread(_ id: String, full: Bool) async throws -> GmailThread {
         threadCalls += 1
@@ -324,4 +325,43 @@ private let sampleSuggestion = TriageSuggestion(bucket: .nextAction, nextAction:
     #expect("\"service@paypal.com.au\" <service@paypal.com.au>".displayName == "service@paypal.com.au")
     #expect("ann@x.com".displayName == "ann@x.com")
     #expect("Ann Lee <ann@x.com>".displayName == "Ann Lee")
+}
+
+// MARK: - Paging
+
+@Test func demoPagesCoverTheWholeListInOrderWithoutRepeats() async throws {
+    let demo = DemoMailService()
+    var ids: [String] = []
+    var token: String?
+    var pages = 0
+    repeat {
+        let page = try await demo.listThreadPage(labelIDs: ["INBOX"], query: nil, max: 6, pageToken: token)
+        ids += page.refs.map(\.id)
+        token = page.nextPageToken
+        pages += 1
+    } while token != nil
+    #expect(ids.count == 20)
+    #expect(Set(ids).count == 20)
+    #expect(pages == 4)   // 6 + 6 + 6 + 2
+    let firstPage = try await demo.listThreadPage(labelIDs: ["INBOX"], query: nil, max: 20, pageToken: nil)
+    #expect(firstPage.nextPageToken == nil)   // an exact fit has no next page
+    #expect(firstPage.refs.map(\.id) == ids)
+}
+
+@Test func eachPageIsCachedSeparately() async throws {
+    let server = CountingService()
+    let cache = CachedMailService(server, listTTL: 60)
+    let first = try await cache.listThreadPage(labelIDs: ["INBOX"], query: nil, max: 5, pageToken: nil)
+    let second = try await cache.listThreadPage(labelIDs: ["INBOX"], query: nil, max: 5, pageToken: first.nextPageToken)
+    #expect(first.refs.map(\.id) != second.refs.map(\.id))
+    _ = try await cache.listThreadPage(labelIDs: ["INBOX"], query: nil, max: 5, pageToken: nil)
+    _ = try await cache.listThreadPage(labelIDs: ["INBOX"], query: nil, max: 5, pageToken: first.nextPageToken)
+    #expect(await server.listCalls == 2)   // both pages served from the cache the second time
+}
+
+@Test func gmailListResponsesCarryTheNextPageToken() throws {
+    let json = #"{"threads":[{"id":"a","snippet":"x","historyId":"7"}],"nextPageToken":"tok123","resultSizeEstimate":300}"#
+    let list = try JSONDecoder().decode(ThreadList.self, from: Data(json.utf8))
+    #expect(list.nextPageToken == "tok123")
+    #expect(list.threads?.first?.historyId == "7")
 }

@@ -10,7 +10,7 @@ public actor CachedMailService: MailService {
     private var threads: [String: GmailThread] = [:]
     private var inFlight: [String: Task<GmailThread, Error>] = [:]
     private var latestHistory: [String: String] = [:]
-    private var lists: [String: (at: Date, refs: [ThreadRef])] = [:]
+    private var lists: [String: (at: Date, page: ThreadPage)] = [:]
     private let listTTL: TimeInterval
     private var recency: [String] = []   // thread ids, least recently used first
     private let capacity: Int
@@ -29,13 +29,13 @@ public actor CachedMailService: MailService {
         latestHistory = [:]
     }
 
-    public func listThreads(labelIDs: [String], query: String?, max: Int) async throws -> [ThreadRef] {
-        let key = "\(labelIDs.sorted())|\(query ?? "")|\(max)"
-        if let hit = lists[key], Date().timeIntervalSince(hit.at) < listTTL { return hit.refs }
-        let refs = try await base.listThreads(labelIDs: labelIDs, query: query, max: max)
-        lists[key] = (Date(), refs)
-        for ref in refs { if let h = ref.historyId { latestHistory[ref.id] = h } }
-        return refs
+    public func listThreadPage(labelIDs: [String], query: String?, max: Int, pageToken: String?) async throws -> ThreadPage {
+        let key = "\(labelIDs.sorted())|\(query ?? "")|\(max)|\(pageToken ?? "")"
+        if let hit = lists[key], Date().timeIntervalSince(hit.at) < listTTL { return hit.page }
+        let page = try await base.listThreadPage(labelIDs: labelIDs, query: query, max: max, pageToken: pageToken)
+        lists[key] = (Date(), page)
+        for ref in page.refs { if let h = ref.historyId { latestHistory[ref.id] = h } }
+        return page
     }
 
     /// Always fetches the full thread: it costs the same quota as metadata and serves every caller.

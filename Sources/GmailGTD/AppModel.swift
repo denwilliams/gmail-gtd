@@ -64,6 +64,14 @@ final class AppModel {
     var loading = false
     var error: String?
 
+    // Paging: the next page of the open folder, loaded as the user nears the end of the list.
+    private(set) var nextPageToken: String?
+    private(set) var loadingMore = false
+    /// Demo mail is only 20 threads, so it pages in small steps to show how paging behaves.
+    private var pageSize: Int { demo ? 8 : 50 }
+    var hasMore: Bool { nextPageToken != nil }
+    var listSubtitle: String { "\(rows.count)\(hasMore ? "+" : "") thread\(rows.count == 1 && !hasMore ? "" : "s")" }
+
     // Today
     var nextActions: [ThreadRow] = []
     var waiting: [ThreadRow] = []
@@ -169,6 +177,7 @@ final class AppModel {
         rows = []
         pending = []
         visible = []
+        nextPageToken = nil
         if folder == .today { await loadToday() } else { await reload() }
     }
 
@@ -178,7 +187,9 @@ final class AppModel {
         guard client != nil else { return }
         loading = true; defer { loading = false }
         do {
-            rows = try await fetchRows(labelID: labelID(for: folder), max: 40, hydrate: false)
+            let page = try await fetchPage(labelID: labelID(for: folder), max: pageSize, hydrate: false, pageToken: nil)
+            rows = page.rows
+            nextPageToken = page.next
             selectFirstIfNeeded()
             scheduleEnqueue()
             error = nil
@@ -201,8 +212,13 @@ final class AppModel {
     /// Lists threads as placeholder rows (the list call already carries each snippet). Headers are fetched
     /// later, only for rows on screen, unless `hydrate` asks for them now.
     private func fetchRows(labelID: String, max: Int, hydrate: Bool) async throws -> [ThreadRow] {
-        guard let client else { return [] }
-        let refs = try await client.listThreads(labelIDs: [labelID], max: max)
+        try await fetchPage(labelID: labelID, max: max, hydrate: hydrate, pageToken: nil).rows
+    }
+
+    private func fetchPage(labelID: String, max: Int, hydrate: Bool, pageToken: String?) async throws -> (rows: [ThreadRow], next: String?) {
+        guard let client else { return ([], nil) }
+        let page = try await client.listThreadPage(labelIDs: [labelID], query: nil, max: max, pageToken: pageToken)
+        let refs = page.refs
         // A header cached against the same historyId needs no request at all.
         var result = refs.map { ref -> ThreadRow in
             if let h = store.header(for: ref.id, historyId: ref.historyId) {
@@ -214,7 +230,7 @@ final class AppModel {
             let threads = await fetchThreads(result.filter { !$0.loaded }.map(\.id))
             result = result.map { $0.loaded ? $0 : Self.row(for: threads[$0.id], placeholder: $0) }
         }
-        return result
+        return (result, page.nextPageToken)
     }
 
     /// Fetches a few threads at a time. Gmail bills per request, and the cache makes repeats free.
@@ -345,7 +361,26 @@ final class AppModel {
     }
 
     /// Rows currently on screen, reported by the list as they scroll in and out.
-    func rowAppeared(_ id: String) { visible.insert(id); scheduleEnqueue() }
+    func rowAppeared(_ id: String) {
+        visible.insert(id)
+        scheduleEnqueue()
+        // Near the end of the list: fetch the next page before the user hits the bottom.
+        if hasMore, rows.suffix(10).contains(where: { $0.id == id }) { Task { await loadMore() } }
+    }
+
+    /// Appends the next page of the open folder.
+    func loadMore() async {
+        guard let token = nextPageToken, !loadingMore, client != nil, folder != .today else { return }
+        loadingMore = true; defer { loadingMore = false }
+        let openFolder = folder
+        do {
+            let page = try await fetchPage(labelID: labelID(for: openFolder), max: pageSize, hydrate: false, pageToken: token)
+            guard folder == openFolder else { return }   // the user has moved to another folder
+            let known = Set(rows.map(\.id))
+            rows += page.rows.filter { !known.contains($0.id) }
+            nextPageToken = page.next
+        } catch { self.error = error.localizedDescription }
+    }
     func rowDisappeared(_ id: String) { visible.remove(id); scheduleEnqueue() }
 
     /// Waits for scrolling to settle, so rows flying past never start a model run.
@@ -468,6 +503,8 @@ final class AppModel {
         guard let i = rows.firstIndex(where: { $0.id == id }) else { return }
         rows.remove(at: i)
         selection = rows.indices.contains(i) ? rows[i].id : rows.last?.id
+        // Filing shrinks the list. If it is now short, no new row will scroll into view to trigger the next page.
+        if hasMore, rows.count < pageSize / 2 { Task { await loadMore() } }
     }
 
     // MARK: - Today
@@ -476,8 +513,8 @@ final class AppModel {
         guard let client else { return }
         loading = true; defer { loading = false }
         do {
-            async let next = fetchRows(labelID: labelIDs[.nextAction] ?? "", max: 8, hydrate: true)
-            async let wait = fetchRows(labelID: labelIDs[.waitingFor] ?? "", max: 8, hydrate: true)
+            async let next = fetchRows(labelID: labelIDs[.nextAction] ?? "", max: 12, hydrate: true)
+            async let wait = fetchRows(labelID: labelIDs[.waitingFor] ?? "", max: 12, hydrate: true)
             async let count = client.threadCount(labelID: "INBOX")
             (nextActions, waiting, inboxCount) = try await (next, wait, count)
             error = nil

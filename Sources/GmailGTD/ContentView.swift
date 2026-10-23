@@ -64,6 +64,7 @@ struct MailView: View {
             }
         }
         .navigationTitle(model.folder.title)
+        .navigationSubtitle(model.folder == .today ? "" : model.listSubtitle)
         .defaultFocus($listFocused, true)
         .onAppear { listFocused = true }
         // Switching folder or filing a thread replaces the focused row, which makes the list drop focus;
@@ -140,8 +141,11 @@ struct ThreadListView: View {
 
     var body: some View {
         @Bindable var model = model
-        List(model.rows, selection: $model.selection) { row in
-            RowView(row: row).tag(row.id)
+        List(selection: $model.selection) {
+            ForEach(model.rows) { row in RowView(row: row).tag(row.id) }
+            if model.loadingMore {
+                ProgressView().controlSize(.small).frame(maxWidth: .infinity).padding(.vertical, 6)
+            }
         }
         .overlay { if model.loading && model.rows.isEmpty { ProgressView() } }
         .frame(width: 340)
@@ -410,6 +414,8 @@ struct TodayView: View {
                                         .buttonStyle(.plain).help("Open in Gmail")
                                 }
                             }
+                            Button("View all Next Actions  \u{2318}1") { model.folder = .bucket(.nextAction) }
+                                .buttonStyle(.link).padding(.top, 4)
                         }
                         .frame(maxWidth: .infinity, alignment: .leading).padding(4)
                     }
@@ -427,6 +433,8 @@ struct TodayView: View {
                                             .buttonStyle(.plain).help("Open in Gmail")
                                     }
                                 }
+                                Button("View all Waiting For  \u{2318}2") { model.folder = .bucket(.waitingFor) }
+                                    .buttonStyle(.link).padding(.top, 4)
                             }
                             .frame(maxWidth: .infinity, alignment: .leading).padding(4)
                         }
@@ -451,7 +459,8 @@ struct ProjectListView: View {
 
     var body: some View {
         @Bindable var model = model
-        List(model.rows, selection: $model.selection) { row in
+        List(selection: $model.selection) {
+            ForEach(model.rows) { row in
             VStack(alignment: .leading, spacing: 4) {
                 HStack {
                     Text(row.loaded ? row.subject : "Project subject").fontWeight(.semibold).lineLimit(1)
@@ -468,6 +477,10 @@ struct ProjectListView: View {
             .onAppear { model.rowAppeared(row.id) }
             .onDisappear { model.rowDisappeared(row.id) }
             .tag(row.id)
+            }
+            if model.loadingMore {
+                ProgressView().controlSize(.small).frame(maxWidth: .infinity).padding(.vertical, 6)
+            }
         }
         .overlay { if model.loading && model.rows.isEmpty { ProgressView() } }
         .frame(width: 300)

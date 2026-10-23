@@ -61,6 +61,10 @@ swift run gtd process                               # walk the inbox
 
 ## Notes
 
+- Lists load 50 threads at a time and fetch the next page as you near the end, so you can scroll back as far
+  as the folder goes (the title bar shows how many are loaded, with a `+` while there are more). Demo mail pages
+  in steps of 8 so you can see it happen. Today shows the 12 newest Next Actions and Waiting For, with links to the full lists.
+
 - Gmail bills every request against a per-user quota, so the app fetches each thread once and shares it
   between the list, the open thread and the model, only loads headers for rows on screen, and backs
   off and retries if Google rate-limits it. Refresh clears the cache.

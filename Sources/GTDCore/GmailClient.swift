@@ -2,7 +2,7 @@ import Foundation
 
 /// What the app needs from a mail backend: the real Gmail API or the in-memory demo.
 public protocol MailService: Sendable {
-    func listThreads(labelIDs: [String], query: String?, max: Int) async throws -> [ThreadRef]
+    func listThreadPage(labelIDs: [String], query: String?, max: Int, pageToken: String?) async throws -> ThreadPage
     func thread(_ id: String, full: Bool) async throws -> GmailThread
     func labels() async throws -> [GmailLabel]
     func createLabel(_ name: String) async throws -> GmailLabel
@@ -12,8 +12,9 @@ public protocol MailService: Sendable {
 }
 
 extension MailService {
+    /// The first page only.
     public func listThreads(labelIDs: [String], max: Int) async throws -> [ThreadRef] {
-        try await listThreads(labelIDs: labelIDs, query: nil, max: max)
+        try await listThreadPage(labelIDs: labelIDs, query: nil, max: max, pageToken: nil).refs
     }
     public func thread(_ id: String) async throws -> GmailThread { try await thread(id, full: false) }
     public func modifyThread(_ id: String, remove: [String]) async throws {
@@ -33,12 +34,13 @@ public actor GmailClient: MailService {
         self.tokens = tokens
     }
 
-    public func listThreads(labelIDs: [String], query: String?, max: Int) async throws -> [ThreadRef] {
+    public func listThreadPage(labelIDs: [String], query: String?, max: Int, pageToken: String?) async throws -> ThreadPage {
         var items = [URLQueryItem(name: "maxResults", value: String(max))]
         items += labelIDs.map { URLQueryItem(name: "labelIds", value: $0) }
         if let query { items.append(.init(name: "q", value: query)) }
+        if let pageToken { items.append(.init(name: "pageToken", value: pageToken)) }
         let list: ThreadList = try await get("threads", items)
-        return list.threads ?? []
+        return ThreadPage(refs: list.threads ?? [], nextPageToken: list.nextPageToken)
     }
 
     /// Approximate number of threads carrying a label (Gmail's own estimate).
