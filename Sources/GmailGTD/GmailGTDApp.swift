@@ -27,9 +27,9 @@ struct GmailGTDApp: App {
             CommandMenu("Go") {
                 Group {
                     Button("Today") { model.folder = .today }
-                        .keyboardShortcut("0", modifiers: .command)
+                        .keyboardShortcut("t", modifiers: .command)
                     Button("Inbox") { model.folder = .inbox }
-                        .keyboardShortcut("7", modifiers: .command)
+                        .keyboardShortcut("0", modifiers: .command)
                     Divider()
                     ForEach(GTDBucket.allCases, id: \.self) { bucket in
                         Button(bucket.title) { model.folder = .bucket(bucket) }

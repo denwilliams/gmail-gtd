@@ -78,12 +78,7 @@ final class AppModel {
     var showShortcuts: Bool { shortcutsPinned || shortcutsHeld }
     private var holdTask: Task<Void, Never>?
     private var flagsMonitor: Any?
-    private var keyMonitor: Any?
 
-    // Which pane has keyboard focus (mirrored from the view), and a request for the view to move it.
-    var focusedPane: Pane?
-    var lastFocusedPane: Pane = .sidebar
-    var focusRequest: Pane?
 
     private var client: (any MailService)?
     private var cache: CachedMailService?
@@ -288,33 +283,12 @@ final class AppModel {
 
     /// Watches the modifier keys so holding ⌘ for half a second reveals the shortcut cheat-sheet.
     private func installModifierMonitor() {
-        installKeyMonitor()
         guard flagsMonitor == nil else { return }
         flagsMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
             let onlyCommand = event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command
             MainActor.assumeIsolated { self?.commandHeld(onlyCommand) }
             return event
         }
-    }
-
-    /// The sidebar is an AppKit outline view that consumes the right arrow (its "expand" key) before
-    /// SwiftUI sees it, so catch that one key early and hand focus to the thread list ourselves.
-    private func installKeyMonitor() {
-        guard keyMonitor == nil else { return }
-        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            let rightArrow: UInt16 = 124
-            let typingModifiers: NSEvent.ModifierFlags = [.command, .option, .control, .shift]
-            guard event.keyCode == rightArrow, event.modifierFlags.intersection(typingModifiers).isEmpty else { return event }
-            let handled = MainActor.assumeIsolated { self?.moveFocusToList() ?? false }
-            return handled ? nil : event
-        }
-    }
-
-    private func moveFocusToList() -> Bool {
-        // Today has no list to move into.
-        guard focusedPane == .sidebar, folder != .today, !rows.isEmpty else { return false }
-        focusRequest = .list
-        return true
     }
 
     private func commandHeld(_ held: Bool) {
@@ -470,17 +444,6 @@ final class AppModel {
         guard let i = rows.firstIndex(where: { $0.id == id }) else { return }
         rows.remove(at: i)
         selection = rows.indices.contains(i) ? rows[i].id : rows.last?.id
-        keepListFocus()
-    }
-
-    /// Removing the focused row makes the list drop keyboard focus. If the user was working in the list,
-    /// give it back after the list has settled, so they can keep filing with the number keys.
-    private func keepListFocus() {
-        guard lastFocusedPane == .list else { return }
-        Task {
-            try? await Task.sleep(for: .milliseconds(40))
-            focusRequest = .list
-        }
     }
 
     // MARK: - Today

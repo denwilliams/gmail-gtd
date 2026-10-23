@@ -35,20 +35,18 @@ struct SignInView: View {
     }
 }
 
-/// Keyboard focus targets, so left/right arrows can hop between the sidebar and the thread list.
-enum Pane: Hashable { case sidebar, list }
-
 struct MailView: View {
     @Environment(AppModel.self) private var model
-    @FocusState private var focus: Pane?
+    /// The arrow keys always drive the email list; the sidebar is reached with ⌘0-⌘7.
+    @FocusState private var listFocused: Bool
 
     var body: some View {
         @Bindable var model = model
         NavigationSplitView {
             List(selection: $model.folder) {
-                sidebarRow("Today", Folder.today.symbol, .yellow, hint: "\u{2318}0").tag(Folder.today)
+                sidebarRow("Today", Folder.today.symbol, .yellow, hint: "\u{2318}T").tag(Folder.today)
                 Section("Process") {
-                    sidebarRow("Inbox", Folder.inbox.symbol, .accentColor, hint: "\u{2318}7").tag(Folder.inbox)
+                    sidebarRow("Inbox", Folder.inbox.symbol, .accentColor, hint: "\u{2318}0").tag(Folder.inbox)
                 }
                 Section("GTD") {
                     ForEach(GTDBucket.allCases, id: \.self) { b in
@@ -57,27 +55,21 @@ struct MailView: View {
                 }
             }
             .navigationSplitViewColumnWidth(min: 170, ideal: 200)
-            .focused($focus, equals: .sidebar)
+            .focusable(false)
         } detail: {
             switch model.folder {
             case .today: TodayView()
-            case .bucket(.project): HStack(spacing: 0) { ProjectListView(focus: $focus); Divider(); ProjectDetailView() }
-            default: HStack(spacing: 0) { ThreadListView(focus: $focus); Divider(); ThreadDetailView() }
+            case .bucket(.project): HStack(spacing: 0) { ProjectListView(focus: $listFocused); Divider(); ProjectDetailView() }
+            default: HStack(spacing: 0) { ThreadListView(focus: $listFocused); Divider(); ThreadDetailView() }
             }
         }
         .navigationTitle(model.folder.title)
-        // When focus is lost (for example the focused row is filed away), fall back to the pane the user
-        // was last in, not always the sidebar.
-        .defaultFocus($focus, model.lastFocusedPane)
-        .onChange(of: focus) { _, pane in
-            model.focusedPane = pane
-            if let pane { model.lastFocusedPane = pane }
-        }
-        .onChange(of: model.focusRequest) { _, pane in
-            guard let pane else { return }
-            focus = pane
-            model.focusRequest = nil
-        }
+        .defaultFocus($listFocused, true)
+        .onAppear { listFocused = true }
+        // Switching folder or filing a thread replaces the focused row, which makes the list drop focus;
+        // give it back once the list has settled so the arrow and number keys keep working.
+        .onChange(of: model.folder) { _, _ in refocusList() }
+        .onChange(of: model.rows) { _, _ in refocusList() }
         .overlay {
             if model.showShortcuts {
                 ShortcutHUD().onTapGesture { model.shortcutsPinned = false }
@@ -98,6 +90,13 @@ struct MailView: View {
 }
 
 extension MailView {
+    fileprivate func refocusList() {
+        Task {
+            try? await Task.sleep(for: .milliseconds(40))
+            listFocused = true
+        }
+    }
+
     /// A sidebar row with a coloured icon and its ⌘ shortcut on the right.
     fileprivate func sidebarRow(_ title: String, _ symbol: String, _ color: Color, hint: String) -> some View {
         HStack {
@@ -137,7 +136,7 @@ struct StatusBar: View {
 
 struct ThreadListView: View {
     @Environment(AppModel.self) private var model
-    var focus: FocusState<Pane?>.Binding
+    var focus: FocusState<Bool>.Binding
 
     var body: some View {
         @Bindable var model = model
@@ -146,8 +145,7 @@ struct ThreadListView: View {
         }
         .overlay { if model.loading && model.rows.isEmpty { ProgressView() } }
         .frame(width: 340)
-        .focused(focus, equals: .list)
-        .onKeyPress(.leftArrow) { focus.wrappedValue = .sidebar; return .handled }
+        .focused(focus)
     }
 }
 
@@ -386,7 +384,7 @@ struct TodayView: View {
 
 struct ProjectListView: View {
     @Environment(AppModel.self) private var model
-    var focus: FocusState<Pane?>.Binding
+    var focus: FocusState<Bool>.Binding
 
     var body: some View {
         @Bindable var model = model
@@ -410,8 +408,7 @@ struct ProjectListView: View {
         }
         .overlay { if model.loading && model.rows.isEmpty { ProgressView() } }
         .frame(width: 300)
-        .focused(focus, equals: .list)
-        .onKeyPress(.leftArrow) { focus.wrappedValue = .sidebar; return .handled }
+        .focused(focus)
     }
 }
 
@@ -476,7 +473,6 @@ struct KeyHintBar: View {
     var body: some View {
         HStack(spacing: 14) {
             hint(["↑", "↓"], "move")
-            hint(["←", "→"], "switch pane")
             hint(["1", "–", "6"], "file")
             hint(["\u{2318}", "1", "–", "6"], "go to")
             hint(["A"], "accept")
@@ -504,10 +500,9 @@ struct ShortcutHUD: View {
             Text("Keyboard Shortcuts").font(.title3.bold())
             HStack(alignment: .top, spacing: 36) {
                 group("Navigate", [
-                    (["↑", "↓"], "Move through categories or threads", nil),
-                    (["←", "→"], "Switch between categories and threads", nil),
-                    (["\u{2318}", "0"], "Today", nil),
-                    (["\u{2318}", "7"], "Inbox", nil),
+                    (["↑", "↓"], "Move through emails", nil),
+                    (["\u{2318}", "0"], "Go to Inbox", nil),
+                    (["\u{2318}", "T"], "Go to Today", nil),
                 ] + GTDBucket.allCases.map { (["\u{2318}", String($0.shortcut)], "Go to \($0.title)", $0.color) })
                 group("File the open thread", GTDBucket.allCases.map { ([String($0.shortcut)], $0.title, $0.color) } + [
                     (["0"], "Back to Inbox", nil),
