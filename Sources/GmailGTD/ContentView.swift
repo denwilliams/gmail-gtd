@@ -252,13 +252,14 @@ struct BucketBar: View {
     let threadID: String
 
     var body: some View {
-        let tint = model.currentBucket?.color ?? .accentColor
         HStack {
-            // Two ways to be finished with a thread: archive it, or keep it where you can find it.
-            Button { Task { await model.archiveSelected() } } label: {
-                Label("Archive", systemImage: "archivebox")
+            // Two ways to be finished with a thread: mark it Done, or keep it as Reference.
+            if model.canFinish {
+                Button { Task { await model.finishSelected() } } label: {
+                    Label("Done", systemImage: Folder.bucket(.done).symbol)
+                }
+                .buttonStyle(.borderedProminent).tint(GTDBucket.done.color)
             }
-            .buttonStyle(.borderedProminent).tint(tint)
             if model.currentBucket != .reference {
                 Button { Task { await model.fileSelected(into: .reference) } } label: {
                     Label("Reference", systemImage: Folder.bucket(.reference).symbol)
@@ -399,8 +400,8 @@ struct TodayView: View {
                             if model.nextActions.isEmpty { Text("None").foregroundStyle(.secondary) }
                             ForEach(model.nextActions) { row in
                                 HStack {
-                                    Button { Task { await model.archive(row) } } label: { Image(systemName: "circle") }
-                                        .buttonStyle(.plain).help("Done: archives the thread (file it as Reference to keep it visible)")
+                                    Button { Task { await model.finish(row) } } label: { Image(systemName: "circle") }
+                                        .buttonStyle(.plain).help("Done: moves the thread to GTD/Done")
                                     Text(row.subject).lineLimit(1)
                                     Spacer()
                                     Text(row.from.displayName)
@@ -483,8 +484,8 @@ struct ProjectDetailView: View {
                 HStack {
                     Text(thread.messages?.last?.subject ?? "").font(.title2.bold()).lineLimit(1)
                     Spacer()
-                    Button { Task { await model.archiveSelected() } } label: { Label("Archive", systemImage: "archivebox") }
-                        .buttonStyle(.borderedProminent).tint(GTDBucket.project.color)
+                    Button { Task { await model.finishSelected() } } label: { Label("Done", systemImage: Folder.bucket(.done).symbol) }
+                        .buttonStyle(.borderedProminent).tint(GTDBucket.done.color)
                     Button { Task { await model.fileSelected(into: .reference) } } label: {
                         Label("Reference", systemImage: Folder.bucket(.reference).symbol)
                     }
@@ -544,14 +545,14 @@ struct KeyHintBar: View {
         HStack(spacing: 14) {
             hint(["↑", "↓"], "move")
             if model.folder == .inbox {
-                hint(["1", "–", "6"], "file")
+                hint(["1", "–", "7"], "file")
                 hint(["A"], "accept")
             } else {
-                if model.canArchive { hint(["E"], "archive") }
+                if model.canFinish { hint(["E"], "done") }
                 hint(["4"], "reference")
-                hint(["1", "–", "6"], "move to")
+                hint(["1", "–", "7"], "move to")
             }
-            hint(["\u{2318}", "1", "–", "6"], "go to")
+            hint(["\u{2318}", "1", "–", "7"], "go to")
             hint(["O"], "open in Gmail")
             Spacer()
             Text("Hold ⌘ for all shortcuts").font(.caption).foregroundStyle(.secondary)
@@ -585,7 +586,7 @@ struct ShortcutHUD: View {
                 ])
                 group("Thread", [
                     (["A"], "Accept the suggestion (Inbox)", nil),
-                    (["E"], "Archive: finished with it, still searchable", nil),
+                    (["E"], "Done: finished with it (same as 7)", nil),
                     (["R"], "Regenerate the suggestion", nil),
                     (["O"], "Open in Gmail", nil),
                     (["\u{2318}", "/"], "Pin or hide this list", nil),

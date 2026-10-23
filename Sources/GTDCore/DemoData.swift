@@ -13,7 +13,7 @@ enum DemoData {
         DemoMessage(from: from, hoursAgo: hoursAgo, body: body, subject: subject, bulk: bulk)
     }
 
-    static let threads: [DemoThreadSeed] = inbox + nextActions + waitingFor + projects + someday + reference + noise
+    static let threads: [DemoThreadSeed] = inbox + nextActions + waitingFor + projects + someday + reference + noise + done
 
     // MARK: Inbox (unprocessed)
 
@@ -142,5 +142,17 @@ enum DemoData {
             "Here's how your week looked. Open the app to see your streaks, badges and friends' activity. Manage email preferences.")]),
         t("nz03", bucket: .noise, [m("Streamly <legal@streamly.example>", 420, subject: "We've updated our privacy policy", bulk: true,
             "We're making some changes to our terms and privacy policy, effective next month. You don't need to do anything. Continued use of the service means you accept the changes.")]),
+    ]
+
+    // MARK: Done
+
+    private static let done: [DemoThreadSeed] = [
+        t("dn01", bucket: .done, [
+            m("Sam Okafor <sam@brightfield.example>", 700, subject: "Catering confirmed for the all-hands", "Catering is booked for the 14th: sandwiches and fruit for 40, delivered at 11:30. Invoice to follow."),
+            m(me, 690, "Perfect, thanks Sam. All sorted on my side.")]),
+        t("dn02", bucket: .done, [m("Accounts Payable <ap@brightfield.example>", 650, subject: "Expense report approved", "Your September expense report has been approved and will be paid with the next run on Friday.")]),
+        t("dn03", bucket: .done, [
+            m(me, 900, subject: "Signed services agreement", "Hi Dana, the signed agreement is attached. Thanks for turning the redlines around so quickly."),
+            m("Dana Whitfield <dana@whitfieldlaw.example>", 880, "Received, thank you. Countersigned copy to follow.")]),
     ]
 }

@@ -13,13 +13,12 @@ gtd: Gmail GTD from the terminal (add --demo for sample mail, no sign-in)
   gtd list <bucket> [N]                            List a bucket
   gtd show <thread-id>                             Print a thread
   gtd file <thread-id> <bucket>                    File into a bucket (archives from inbox)
-  gtd archive <thread-id>                          Finish with a thread: clears its GTD label, stays searchable
-                                                   (to keep it visible, use: gtd file <id> reference)
+  gtd done <thread-id>                             Mark a thread Done (moves it to GTD/Done)
   gtd unfile <thread-id>                           Return to inbox
   gtd suggest <thread-id>                          On-device triage suggestion
   gtd process [N]                                  Walk the inbox interactively
 
-Buckets: next, waiting, someday, reference, project, noise
+Buckets: next, waiting, someday, reference, project, noise, done
 """
 
 func fail(_ message: String) -> Never {
@@ -40,7 +39,7 @@ func option(_ name: String, in args: [String]) -> String? {
 }
 
 func bucketArg(_ s: String?) -> GTDBucket {
-    guard let s, let b = GTDBucket(cliName: s) else { fail("Unknown bucket. Use: next, waiting, someday, reference, project, noise") }
+    guard let s, let b = GTDBucket(cliName: s) else { fail("Unknown bucket. Use: next, waiting, someday, reference, project, noise, done") }
     return b
 }
 
@@ -157,10 +156,10 @@ func run() async throws {
         let bucket = bucketArg(args[1])
         try await labels.file(thread: args[0], into: bucket)
         print("Filed → \(bucket.title)")
-    case "archive", "done":
+    case "done":
         guard let id = args.first else { fail(usage) }
-        try await connect().1.archive(thread: id)
-        print("Archived.")
+        try await connect().1.file(thread: id, into: .done)
+        print("Done.")
     case "unfile":
         guard let id = args.first else { fail(usage) }
         try await connect().1.unfile(thread: id)

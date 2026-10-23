@@ -12,6 +12,7 @@ extension GTDBucket {
         case .reference: .teal
         case .project: .indigo
         case .noise: .gray
+        case .done: .green
         }
     }
 }

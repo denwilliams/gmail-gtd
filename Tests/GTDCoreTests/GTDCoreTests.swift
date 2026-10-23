@@ -13,6 +13,8 @@ import Foundation
     #expect(GTDBucket(cliName: "next") == .nextAction)
     #expect(GTDBucket(cliName: "waiting-for") == .waitingFor)
     #expect(GTDBucket(cliName: "noise") == .noise)
+    #expect(GTDBucket(cliName: "done") == .done)
+    #expect(GTDBucket.done.labelName == "GTD/Done")
     #expect(GTDBucket(cliName: "nope") == nil)
 }
 
@@ -64,14 +66,16 @@ import Foundation
     #expect(!(try await demo.listThreads(labelIDs: [ids[.nextAction]!], max: 50)).contains { $0.id == "in01" })
 }
 
-@Test func archiveAndUnfile() async throws {
+@Test func doneIsABucketSoEveryThreadKeepsAGTDLabel() async throws {
     let demo = DemoMailService()
     let labels = LabelManager(client: demo)
     let ids = try await labels.ensureLabels()
-    let before = try await demo.threadCount(labelID: ids[.nextAction]!)
-    try await labels.archive(thread: "na01")
-    #expect(try await demo.threadCount(labelID: ids[.nextAction]!) == before - 1)
-    #expect(try await demo.threadCount(labelID: "INBOX") == 20)   // archived, not returned to the inbox
+    let nextBefore = try await demo.threadCount(labelID: ids[.nextAction]!)
+    let doneBefore = try await demo.threadCount(labelID: ids[.done]!)
+    try await labels.file(thread: "na01", into: .done)
+    #expect(try await demo.threadCount(labelID: ids[.nextAction]!) == nextBefore - 1)
+    #expect(try await demo.threadCount(labelID: ids[.done]!) == doneBefore + 1)   // labelled Done, not stripped
+    #expect(try await demo.threadCount(labelID: "INBOX") == 20)                   // and not returned to the inbox
 
     try await labels.unfile(thread: "na02")
     #expect(try await demo.threadCount(labelID: "INBOX") == 21)

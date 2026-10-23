@@ -59,9 +59,9 @@ struct GmailGTDApp: App {
                     Divider()
                     Button("Accept Suggestion") { Task { await model.acceptSuggestion() } }
                         .keyboardShortcut("a", modifiers: [])
-                    Button("Archive") { Task { await model.archiveSelected() } }
+                    Button("Done") { Task { await model.finishSelected() } }
                         .keyboardShortcut("e", modifiers: [])
-                        .disabled(!model.canArchive)
+                        .disabled(!model.canFinish)
                     Button("Regenerate Suggestion") { model.regenerateSelected() }
                         .keyboardShortcut("r", modifiers: [])
                     Button("Open in Gmail") { model.openSelectedInGmail() }

@@ -27,13 +27,6 @@ public actor LabelManager {
         try await client.modifyThread(id, add: [all[bucket]!], remove: ["INBOX"] + others)
     }
 
-    /// Takes a thread out of the GTD system: clears its GTD labels and leaves it archived, so it is
-    /// out of every view but still found by Gmail search. (To keep it visible, file it as Reference.)
-    public func archive(thread id: String) async throws {
-        let all = try await ensureLabels()
-        try await client.modifyThread(id, remove: Array(all.values))
-    }
-
     /// Returns a thread to the inbox, clearing its GTD labels.
     public func unfile(thread id: String) async throws {
         let all = try await ensureLabels()

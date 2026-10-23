@@ -25,6 +25,7 @@ enum Folder: Hashable, Identifiable {
         case .bucket(.reference): "books.vertical"
         case .bucket(.project): "square.stack.3d.up"
         case .bucket(.noise): "speaker.slash"
+        case .bucket(.done): "checkmark.circle"
         }
     }
     static let mail: [Folder] = [.inbox] + GTDBucket.allCases.map(Folder.bucket)
@@ -435,9 +436,9 @@ final class AppModel {
         } catch { self.error = error.localizedDescription }
     }
 
-    /// Any filed thread can be archived: finished with, out of every view, still found by search.
-    /// (Keeping it visible is a different choice: file it as Reference.)
-    var canArchive: Bool { currentBucket != nil }
+    /// Any filed thread can be marked Done, except one that already is. (Reference is the other way to be
+    /// finished with a thread: it keeps it where you can browse it.)
+    var canFinish: Bool { currentBucket != nil && currentBucket != .done }
 
     /// The bucket being viewed, if any.
     var currentBucket: GTDBucket? {
@@ -445,15 +446,12 @@ final class AppModel {
         return nil
     }
 
-    /// Archives the open thread: clears its GTD label and leaves it out of the inbox (the same as ticking it on Today).
-    func archiveSelected() async {
-        guard canArchive, let labels, let id = selection else { return }
-        do {
-            try await labels.archive(thread: id)
-            nextActions.removeAll { $0.id == id }
-            waiting.removeAll { $0.id == id }
-            removeRow(id)
-        } catch { self.error = error.localizedDescription }
+    /// Marks the open thread Done (the same as ticking it on Today): it moves to `GTD/Done`.
+    func finishSelected() async {
+        guard canFinish, let id = selection else { return }
+        await fileSelected(into: .done)
+        nextActions.removeAll { $0.id == id }
+        waiting.removeAll { $0.id == id }
     }
 
     func unfileSelected() async {
@@ -496,10 +494,10 @@ final class AppModel {
     }
 
     /// Ticks off a Next Action: clears its GTD label and leaves it archived.
-    func archive(_ row: ThreadRow) async {
+    func finish(_ row: ThreadRow) async {
         guard let labels else { return }
         do {
-            try await labels.archive(thread: row.id)
+            try await labels.file(thread: row.id, into: .done)
             nextActions.removeAll { $0.id == row.id }
             waiting.removeAll { $0.id == row.id }
         } catch { self.error = error.localizedDescription }
