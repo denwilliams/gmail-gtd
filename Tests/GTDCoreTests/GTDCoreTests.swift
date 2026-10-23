@@ -322,7 +322,7 @@ private let sampleSuggestion = TriageSuggestion(bucket: .nextAction, nextAction:
 
 @Test func senderNamesLoseTheirQuotes() {
     #expect("\"Ann Lee\" <ann@x.com>".displayName == "Ann Lee")
-    #expect("\"service@paypal.com.au\" <service@paypal.com.au>".displayName == "service@paypal.com.au")
+    #expect("\"service@bank.example\" <service@bank.example>".displayName == "service@bank.example")
     #expect("ann@x.com".displayName == "ann@x.com")
     #expect("Ann Lee <ann@x.com>".displayName == "Ann Lee")
 }
