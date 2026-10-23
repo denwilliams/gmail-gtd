@@ -44,6 +44,8 @@ scripts/install.sh --no-open     # install without launching
 scripts/install.sh --debug       # faster debug build
 ```
 
+`GmailGTD --check-config` prints whether the app can see a saved client ID and Keychain tokens (never the values), which is the first thing to run if a built app says it isn't signed in.
+
 The icon is drawn in code (`Sources/GmailGTD/AppIcon.swift`); the script asks the app to export it and
 turns it into an `.icns`. The bundle is ad-hoc signed, which is enough to run on this Mac. Sharing it
 with other Macs would need a Developer ID signature and notarisation.

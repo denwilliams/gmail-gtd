@@ -393,3 +393,22 @@ private let sampleSuggestion = TriageSuggestion(bucket: .nextAction, nextAction:
     #expect(try await demo.threadCount(labelID: ids[.nextAction]!) == nextBefore)
     #expect(try await demo.threadCount(labelID: ids[.done]!) == 3)
 }
+
+// MARK: - Saved client ID
+
+@Test func appWithTheSuiteNameAsItsBundleIDUsesStandardDefaults() {
+    // The built app's bundle ID equals the suite name; UserDefaults(suiteName:) is nil for that, so use .standard.
+    #expect(OAuthConfig.store(suite: "dev.denw.gmail-gtd", bundleID: "dev.denw.gmail-gtd") === UserDefaults.standard)
+    // A bare executable (swift run, the CLI) has no bundle ID and uses the named suite.
+    #expect(OAuthConfig.store(suite: "gmail-gtd-test-suite", bundleID: nil) !== UserDefaults.standard)
+}
+
+@Test func savedConfigRoundTrips() throws {
+    let suite = "gmail-gtd-test-\(UUID().uuidString)"
+    defer { UserDefaults().removePersistentDomain(forName: suite) }
+    let store = OAuthConfig.store(suite: suite, bundleID: nil)
+    store.set(try JSONEncoder().encode(OAuthConfig(clientID: "id-123", clientSecret: "s3cret")), forKey: "oauthConfig")
+    let loaded = try JSONDecoder().decode(OAuthConfig.self, from: #require(store.data(forKey: "oauthConfig")))
+    #expect(loaded.clientID == "id-123")
+    #expect(loaded.clientSecret == "s3cret")
+}

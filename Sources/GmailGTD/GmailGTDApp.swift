@@ -8,6 +8,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Build tooling: `GmailGTD --export-icon <folder>.iconset` writes the icon files and quits.
         let args = CommandLine.arguments
+        // `GmailGTD --check-config` reports what the app can see (never the values) and quits.
+        if args.contains("--check-config") {
+            print("client ID saved: \(OAuthConfig.load() != nil ? "yes" : "no")")
+            print("signed in (tokens in Keychain): \(TokenStore.load() != nil ? "yes" : "no")")
+            NSApp.terminate(nil)
+            return
+        }
         if let i = args.firstIndex(of: "--export-icon"), args.indices.contains(i + 1) {
             AppIcon.exportIconset(to: args[i + 1])
             NSApp.terminate(nil)

@@ -32,6 +32,15 @@ public struct OAuthConfig: Codable, Sendable {
 
     public static let scope = "https://www.googleapis.com/auth/gmail.modify"
     private static let defaultsKey = "oauthConfig"
+    static let suite = "dev.denw.gmail-gtd"
+
+    /// Where the config lives: one settings file shared by `swift run`, the CLI and the built app.
+    ///
+    /// The built app's bundle identifier *is* this suite name, and `UserDefaults(suiteName:)` returns nil for the
+    /// main bundle's own identifier, which silently saved nothing. In that case `.standard` is the very same file.
+    static func store(suite: String = OAuthConfig.suite, bundleID: String? = Bundle.main.bundleIdentifier) -> UserDefaults {
+        bundleID == suite ? .standard : (UserDefaults(suiteName: suite) ?? .standard)
+    }
 
     public init(clientID: String, clientSecret: String? = nil) {
         self.clientID = clientID
@@ -43,12 +52,12 @@ public struct OAuthConfig: Codable, Sendable {
         if let id = env["GMAIL_GTD_CLIENT_ID"], !id.isEmpty {
             return OAuthConfig(clientID: id, clientSecret: env["GMAIL_GTD_CLIENT_SECRET"])
         }
-        guard let data = UserDefaults(suiteName: "dev.denw.gmail-gtd")?.data(forKey: defaultsKey) else { return nil }
+        guard let data = store().data(forKey: defaultsKey) else { return nil }
         return try? JSONDecoder().decode(OAuthConfig.self, from: data)
     }
 
     public func save() {
-        UserDefaults(suiteName: "dev.denw.gmail-gtd")?.set(try? JSONEncoder().encode(self), forKey: Self.defaultsKey)
+        Self.store().set(try? JSONEncoder().encode(self), forKey: Self.defaultsKey)
     }
 }
 

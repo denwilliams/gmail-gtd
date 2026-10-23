@@ -181,7 +181,12 @@ final class AppModel {
     }
 
     private func connect() async {
-        guard let config = OAuthConfig.load() else { error = GmailError.notConfigured.localizedDescription; return }
+        guard let config = OAuthConfig.load() else {
+            // Tokens can't be refreshed without the client ID, so ask for it rather than showing a dead mailbox.
+            signedIn = false
+            error = "Enter your OAuth client ID to continue."
+            return
+        }
         do { await connect(using: try GmailClient(auth: GmailAuth(config: config)), persist: true) } catch { self.error = error.localizedDescription }
     }
 
