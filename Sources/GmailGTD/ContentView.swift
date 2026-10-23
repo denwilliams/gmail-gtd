@@ -143,13 +143,15 @@ struct RowView: View {
         let suggestion = model.suggestions[row.id]
         VStack(alignment: .leading, spacing: 2) {
             HStack {
-                Text(row.from.components(separatedBy: " <").first ?? row.from)
+                Text(row.loaded ? (row.from.components(separatedBy: " <").first ?? row.from) : "Sender name")
                     .fontWeight(row.unread ? .semibold : .regular).lineLimit(1)
+                    .redacted(reason: row.loaded ? [] : .placeholder)
                 Spacer()
                 if model.isGenerating(row.id) { ProgressView().controlSize(.mini) }
                 if let date = row.date { Text(date, style: .date).font(.caption).foregroundStyle(.secondary) }
             }
-            Text(row.subject).lineLimit(1)
+            Text(row.loaded ? row.subject : "Subject line").lineLimit(1)
+                .redacted(reason: row.loaded ? [] : .placeholder)
             // The on-device summary replaces the raw snippet once it is ready.
             Text(suggestion?.summary ?? row.snippet).font(.caption).foregroundStyle(.secondary).lineLimit(2)
             if let suggestion {
@@ -325,7 +327,8 @@ struct ProjectListView: View {
         List(model.rows, selection: $model.selection) { row in
             VStack(alignment: .leading, spacing: 4) {
                 HStack {
-                    Text(row.subject).fontWeight(.semibold).lineLimit(1)
+                    Text(row.loaded ? row.subject : "Project subject").fontWeight(.semibold).lineLimit(1)
+                        .redacted(reason: row.loaded ? [] : .placeholder)
                     Spacer()
                     if model.isGenerating(row.id) { ProgressView().controlSize(.mini) }
                 }
@@ -408,7 +411,7 @@ struct KeyHintBar: View {
         HStack(spacing: 14) {
             hint(["↑", "↓"], "move")
             hint(["←", "→"], "switch pane")
-            hint(["1", "–", "5"], "file")
+            hint(["1", "–", "6"], "file")
             hint(["A"], "accept")
             hint(["O"], "open in Gmail")
             Spacer()

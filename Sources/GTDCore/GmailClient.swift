@@ -91,12 +91,19 @@ public actor GmailClient: MailService {
     }
 
     private func perform<T: Decodable>(_ request: URLRequest) async throws -> T {
-        if tokens.expiry <= Date() { tokens = try await auth.refresh(tokens) }
-        var req = request
-        req.setValue("Bearer \(tokens.accessToken)", forHTTPHeaderField: "Authorization")
-        let (data, resp) = try await URLSession.shared.data(for: req)
-        let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
-        guard (200..<300).contains(code) else { throw GmailError.http(code, String(data: data, encoding: .utf8) ?? "") }
-        return try JSONDecoder().decode(T.self, from: data)
+        // Gmail rate-limits per user. If it pushes back, wait and retry rather than failing the action.
+        for attempt in 0..<4 {
+            if tokens.expiry <= Date() { tokens = try await auth.refresh(tokens) }
+            var req = request
+            req.setValue("Bearer \(tokens.accessToken)", forHTTPHeaderField: "Authorization")
+            let (data, resp) = try await URLSession.shared.data(for: req)
+            let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+            if (200..<300).contains(code) { return try JSONDecoder().decode(T.self, from: data) }
+            let body = String(data: data, encoding: .utf8) ?? ""
+            let limited = code == 429 || (code == 403 && ["rateLimitExceeded", "userRateLimitExceeded", "Quota exceeded"].contains { body.contains($0) })
+            guard limited, attempt < 3 else { throw GmailError.http(code, body) }
+            try await Task.sleep(for: .seconds(Double(5 << attempt)))   // 5s, 10s, 20s
+        }
+        throw GmailError.http(429, "Rate limited")
     }
 }

@@ -11,19 +11,23 @@ struct LabelList: Decodable { let labels: [GmailLabel]? }
 public struct ThreadRef: Decodable, Sendable, Hashable, Identifiable {
     public let id: String
     public let snippet: String?
+    /// Changes whenever the thread does, so a cached copy can be checked without refetching it.
+    public let historyId: String?
 
-    public init(id: String, snippet: String?) {
+    public init(id: String, snippet: String?, historyId: String? = nil) {
         self.id = id
         self.snippet = snippet
+        self.historyId = historyId
     }
 
-    private enum CodingKeys: String, CodingKey { case id, snippet }
+    private enum CodingKeys: String, CodingKey { case id, snippet, historyId }
 
     /// Gmail sends snippets HTML-escaped (`&#39;`, `&amp;`), so decode them for display.
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(String.self, forKey: .id)
         snippet = try c.decodeIfPresent(String.self, forKey: .snippet)?.htmlUnescaped
+        historyId = try c.decodeIfPresent(String.self, forKey: .historyId)
     }
 }
 
@@ -37,6 +41,7 @@ struct GmailProfile: Decodable { let emailAddress: String }
 
 public struct GmailThread: Decodable, Sendable, Identifiable {
     public let id: String
+    public let historyId: String?
     public let messages: [GmailMessage]?
 }
 
@@ -64,6 +69,19 @@ public struct GmailMessage: Decodable, Sendable, Identifiable {
     public var from: String { header("From") ?? "" }
     public var date: Date? { internalDate.flatMap { Double($0) }.map { Date(timeIntervalSince1970: $0 / 1000) } }
     public var isUnread: Bool { labelIds?.contains("UNREAD") ?? false }
+
+    /// Signals that a message was sent by a machine to many people: an unsubscribe header, bulk
+    /// precedence, or a no-reply sender. Real bulk mail almost always carries at least one.
+    public var bulkSignals: [String] {
+        var signals: [String] = []
+        if header("List-Unsubscribe") != nil { signals.append("has an unsubscribe link") }
+        if ["bulk", "list", "junk"].contains(header("Precedence")?.lowercased() ?? "") { signals.append("marked as bulk mail") }
+        let sender = from.lowercased()
+        if ["noreply", "no-reply", "donotreply", "do-not-reply"].contains(where: sender.contains) {
+            signals.append("sent from a no-reply address")
+        }
+        return signals
+    }
 
     /// Best-effort plain text body: prefers text/plain, falls back to tag-stripped text/html.
     public var plainText: String {

@@ -2,7 +2,7 @@ import Foundation
 
 /// The GTD buckets, each backed by a nested Gmail label.
 public enum GTDBucket: String, CaseIterable, Codable, Sendable {
-    case nextAction, waitingFor, someday, reference, project
+    case nextAction, waitingFor, someday, reference, project, noise
 
     public static let labelPrefix = "GTD"
 
@@ -13,6 +13,7 @@ public enum GTDBucket: String, CaseIterable, Codable, Sendable {
         case .someday: "Someday/Maybe"
         case .reference: "Reference"
         case .project: "Project"
+        case .noise: "Noise"
         }
     }
 
@@ -28,6 +29,7 @@ public enum GTDBucket: String, CaseIterable, Codable, Sendable {
         case .someday: "3"
         case .reference: "4"
         case .project: "5"
+        case .noise: "6"
         }
     }
 
@@ -44,6 +46,7 @@ public enum GTDBucket: String, CaseIterable, Codable, Sendable {
         case "someday", "maybe", "s": self = .someday
         case "reference", "ref", "r": self = .reference
         case "project", "p": self = .project
+        case "noise", "junk": self = .noise
         default: return nil
         }
     }

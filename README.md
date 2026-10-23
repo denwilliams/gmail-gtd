@@ -9,7 +9,7 @@ content goes to a cloud model.
 - `GTDCore`: auth, Gmail REST client, label manager, triage
 
 GTD buckets are Gmail labels: `GTD/Next Action`, `GTD/Waiting For`, `GTD/Someday`,
-`GTD/Reference`, `GTD/Project`. Filing a thread archives it from the inbox and swaps the
+`GTD/Reference`, `GTD/Project`, `GTD/Noise` (bulk mail you probably never need; a denoise and trash step is planned). Filing a thread archives it from the inbox and swaps the
 label, so it works in the Gmail web UI too.
 
 ## Demo mode
@@ -46,8 +46,12 @@ swift run gtd process                               # walk the inbox
 
 ## Notes
 
+- Gmail bills every request against a per-user quota, so the app fetches each thread once and shares it
+  between the list, the open thread and the model, only loads headers for rows on screen, and backs
+  off and retries if Google rate-limits it. Refresh clears the cache.
+
 - Requires macOS 26+ for Foundation Models. Threads are trimmed to fit the small on-device
   context window.
 - The model runs automatically on the open inbox thread, but nothing is filed until you accept.
 - Compose and reply aren't built yet; use Open in Gmail.
-- Keys in the app: `1`-`5` file into a bucket, `0` back to inbox. Suggestions generate automatically for the open inbox thread (and plans for projects); Regenerate re-runs one.
+- Keys in the app: `1`-`6` file into a bucket, `0` back to inbox. Suggestions generate automatically for the open inbox thread (and plans for projects); Regenerate re-runs one.

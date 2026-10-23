@@ -1,0 +1,64 @@
+import Foundation
+
+/// Wraps a mail service so each thread is fetched at most once, however many places ask for it.
+///
+/// Gmail bills every request against a per-user quota. The list row, the open thread and the on-device
+/// model all want the same thread, so one full fetch is cached and shared, and simultaneous requests for
+/// the same thread join a single call. A cached thread is reused until Gmail reports a newer `historyId`.
+public actor CachedMailService: MailService {
+    private let base: any MailService
+    private var threads: [String: GmailThread] = [:]
+    private var inFlight: [String: Task<GmailThread, Error>] = [:]
+    private var latestHistory: [String: String] = [:]
+    private var lists: [String: (at: Date, refs: [ThreadRef])] = [:]
+    private let listTTL: TimeInterval
+
+    public init(_ base: any MailService, listTTL: TimeInterval = 20) {
+        self.base = base
+        self.listTTL = listTTL
+    }
+
+    /// Forget everything, so the next read goes to Gmail. Used by Refresh.
+    public func invalidateAll() {
+        threads = [:]
+        lists = [:]
+        latestHistory = [:]
+    }
+
+    public func listThreads(labelIDs: [String], query: String?, max: Int) async throws -> [ThreadRef] {
+        let key = "\(labelIDs.sorted())|\(query ?? "")|\(max)"
+        if let hit = lists[key], Date().timeIntervalSince(hit.at) < listTTL { return hit.refs }
+        let refs = try await base.listThreads(labelIDs: labelIDs, query: query, max: max)
+        lists[key] = (Date(), refs)
+        for ref in refs { if let h = ref.historyId { latestHistory[ref.id] = h } }
+        return refs
+    }
+
+    /// Always fetches the full thread: it costs the same quota as metadata and serves every caller.
+    public func thread(_ id: String, full: Bool) async throws -> GmailThread {
+        if let cached = threads[id], isFresh(cached) { return cached }
+        if let running = inFlight[id] { return try await running.value }
+        let task = Task { [base] in try await base.thread(id, full: true) }
+        inFlight[id] = task
+        defer { inFlight[id] = nil }
+        let thread = try await task.value
+        threads[id] = thread
+        return thread
+    }
+
+    private func isFresh(_ thread: GmailThread) -> Bool {
+        guard let known = latestHistory[thread.id], let have = thread.historyId else { return true }
+        return known == have
+    }
+
+    public func labels() async throws -> [GmailLabel] { try await base.labels() }
+    public func createLabel(_ name: String) async throws -> GmailLabel { try await base.createLabel(name) }
+    public func threadCount(labelID: String) async throws -> Int { try await base.threadCount(labelID: labelID) }
+    public func emailAddress() async throws -> String { try await base.emailAddress() }
+
+    public func modifyThread(_ id: String, add: [String], remove: [String]) async throws {
+        try await base.modifyThread(id, add: add, remove: remove)
+        threads[id] = nil   // Its labels changed; any list that included it is stale too.
+        lists = [:]
+    }
+}

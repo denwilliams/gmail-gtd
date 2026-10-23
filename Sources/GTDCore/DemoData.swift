@@ -9,11 +9,11 @@ enum DemoData {
         DemoThreadSeed(id: id, inbox: inbox, bucket: bucket, unread: unread, messages: messages)
     }
 
-    private static func m(_ from: String, _ hoursAgo: Double, subject: String? = nil, _ body: String) -> DemoMessage {
-        DemoMessage(from: from, hoursAgo: hoursAgo, body: body, subject: subject)
+    private static func m(_ from: String, _ hoursAgo: Double, subject: String? = nil, bulk: Bool = false, _ body: String) -> DemoMessage {
+        DemoMessage(from: from, hoursAgo: hoursAgo, body: body, subject: subject, bulk: bulk)
     }
 
-    static let threads: [DemoThreadSeed] = inbox + nextActions + waitingFor + projects + someday + reference
+    static let threads: [DemoThreadSeed] = inbox + nextActions + waitingFor + projects + someday + reference + noise
 
     // MARK: Inbox (unprocessed)
 
@@ -26,7 +26,7 @@ enum DemoData {
             m("Sam Okafor <sam@brightfield.example>", 4, "Quote is in: $14,200 all-in including catering. Need a yes or no from you today to hold the dates.")]),
         t("in03", inbox: true, [m("Billing <billing@cloudharbor.example>", 5, subject: "Your invoice INV-20418 is ready",
             "Your invoice for October is now available. Amount due: $312.40. Payment is due on 15 November.\n\nNo action is needed if you have automatic payments on.")]),
-        t("in04", inbox: true, unread: true, [m("Swift Weekly Brief <hello@swiftbrief.example>", 9, subject: "Swift Weekly Brief: structured concurrency tips",
+        t("in04", inbox: true, unread: true, [m("Swift Weekly Brief <hello@swiftbrief.example>", 9, subject: "Swift Weekly Brief: structured concurrency tips", bulk: true,
             "This week: five patterns for structured concurrency, a deep dive on actors, and a look at what's new in on-device language model APIs. Read online or reply to unsubscribe.")]),
         t("in05", inbox: true, unread: true, [m("Jordan Lee <jordan@fernhill.example>", 6, subject: "Intro: Maya from Northwind",
             "Alex, meet Maya Chen. She runs partnerships at Northwind and is keen to talk about a possible integration. Maya, Alex is who I mentioned.\n\nI'll let you two take it from here. Maya's free most afternoons next week.\n\nJordan")]),
@@ -131,5 +131,16 @@ enum DemoData {
         t("rf01", bucket: .reference, [m("Facilities <facilities@brightfield.example>", 1000, subject: "Office wifi and door codes", "Guest wifi: Brightfield-Guest. Password rotates monthly and is on the reception board. Door code for after-hours access is held by team leads.")]),
         t("rf02", bucket: .reference, [m("Harbor Insurance <policies@harborins.example>", 1200, subject: "Your policy documents", "Your business insurance renews on 1 March. Policy documents and the certificate of currency are attached for your records.")]),
         t("rf03", bucket: .reference, [m("People Team <people@brightfield.example>", 1100, subject: "Expense policy 2026", "Updated expense policy attached. Meals up to $60 per day while travelling. Receipts required for anything over $25. Submit within 30 days.")]),
+    ]
+
+    // MARK: Noise
+
+    private static let noise: [DemoThreadSeed] = [
+        t("nz01", bucket: .noise, [m("Shopfront <deals@shopfront.example>", 300, subject: "50% off everything this weekend only", bulk: true,
+            "Our biggest sale of the year starts now. Use code WEEKEND50 at checkout. Free shipping on orders over $40. Unsubscribe at any time.")]),
+        t("nz02", bucket: .noise, [m("FitTrack <digest@fittrack.example>", 330, subject: "Your weekly activity digest", bulk: true,
+            "Here's how your week looked. Open the app to see your streaks, badges and friends' activity. Manage email preferences.")]),
+        t("nz03", bucket: .noise, [m("Streamly <legal@streamly.example>", 420, subject: "We've updated our privacy policy", bulk: true,
+            "We're making some changes to our terms and privacy policy, effective next month. You don't need to do anything. Continued use of the service means you accept the changes.")]),
     ]
 }

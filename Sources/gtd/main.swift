@@ -17,7 +17,7 @@ gtd: Gmail GTD from the terminal (add --demo for sample mail, no sign-in)
   gtd suggest <thread-id>                          On-device triage suggestion
   gtd process [N]                                  Walk the inbox interactively
 
-Buckets: next, waiting, someday, reference, project
+Buckets: next, waiting, someday, reference, project, noise
 """
 
 func fail(_ message: String) -> Never {
@@ -38,7 +38,7 @@ func option(_ name: String, in args: [String]) -> String? {
 }
 
 func bucketArg(_ s: String?) -> GTDBucket {
-    guard let s, let b = GTDBucket(cliName: s) else { fail("Unknown bucket. Use: next, waiting, someday, reference, project") }
+    guard let s, let b = GTDBucket(cliName: s) else { fail("Unknown bucket. Use: next, waiting, someday, reference, project, noise") }
     return b
 }
 

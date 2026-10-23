@@ -83,10 +83,11 @@ public actor DemoMailService: MailService {
                 internalDate: String(Int(now.addingTimeInterval(-m.hoursAgo * 3600).timeIntervalSince1970 * 1000)),
                 payload: .init(mimeType: "text/plain",
                                headers: [.init(name: "Subject", value: m.subject ?? t.messages[0].subject ?? ""),
-                                         .init(name: "From", value: m.from)],
+                                         .init(name: "From", value: m.from)]
+                                   + (m.bulk ? [.init(name: "List-Unsubscribe", value: "<mailto:unsubscribe@example.com>")] : []),
                                body: .init(data: Data(m.body.utf8).base64URL), parts: nil))
         }
-        return GmailThread(id: t.id, messages: messages)
+        return GmailThread(id: t.id, historyId: nil, messages: messages)
     }
 
     private static func snippet(_ body: String) -> String {
@@ -99,6 +100,7 @@ struct DemoMessage {
     let hoursAgo: Double
     let body: String
     var subject: String? = nil
+    var bulk = false
 }
 
 struct DemoThreadSeed {

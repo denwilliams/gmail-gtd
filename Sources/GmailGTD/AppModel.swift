@@ -24,6 +24,7 @@ enum Folder: Hashable, Identifiable {
         case .bucket(.someday): "moon.zzz"
         case .bucket(.reference): "books.vertical"
         case .bucket(.project): "square.stack.3d.up"
+        case .bucket(.noise): "speaker.slash"
         }
     }
     static let mail: [Folder] = [.inbox] + GTDBucket.allCases.map(Folder.bucket)
@@ -36,6 +37,8 @@ struct ThreadRow: Identifiable, Hashable {
     let snippet: String
     let date: Date?
     let unread: Bool
+    /// False until the thread's headers have been fetched; the list shows the snippet meanwhile.
+    var loaded = true
 }
 
 @MainActor @Observable
@@ -45,9 +48,9 @@ final class AppModel {
     var signedIn = TokenStore.load() != nil || AppModel.launchedInDemo
     var demo = false
     var notice: String?
-    var folder: Folder = .today { didSet { Task { await folderChanged() } } }
+    var folder: Folder = .today { didSet { guard folder != oldValue else { return }; Task { await folderChanged() } } }
     var rows: [ThreadRow] = []
-    var selection: String? { didSet { Task { await loadDetail() } } }
+    var selection: String? { didSet { guard selection != oldValue else { return }; Task { await loadDetail() } } }
     var detail: GmailThread?
     var suggestions: [String: TriageSuggestion] = [:]
     var aiNote: String?   // Why the on-device model produced nothing, shown inline rather than as an error.
@@ -78,6 +81,9 @@ final class AppModel {
     var focusRequest: Pane?
 
     private var client: (any MailService)?
+    private var cache: CachedMailService?
+    /// Threads whose fetch or model run failed; skipped so a bad thread can't be retried on every scroll.
+    private var failed: Set<String> = []
     private var labels: LabelManager?
     private var labelIDs: [GTDBucket: String] = [:]
     private var email: String?
@@ -133,7 +139,7 @@ final class AppModel {
     func signOut() {
         if !demo { TokenStore.clear() }
         demo = false; notice = nil
-        signedIn = false; client = nil; labels = nil; email = nil
+        signedIn = false; client = nil; cache = nil; labels = nil; email = nil
         rows = []; detail = nil; selection = nil; nextActions = []; waiting = []; digest = nil
     }
 
@@ -142,11 +148,13 @@ final class AppModel {
         do { await connect(using: try GmailClient(auth: GmailAuth(config: config))) } catch { self.error = error.localizedDescription }
     }
 
-    private func connect(using client: any MailService) async {
+    private func connect(using base: any MailService) async {
+        // Every read goes through the cache, so a thread is fetched once however many views want it.
+        let client = CachedMailService(base)
         do {
             let labels = LabelManager(client: client)
             labelIDs = try await labels.ensureLabels()
-            self.client = client; self.labels = labels
+            self.client = client; self.cache = client; self.labels = labels
             email = try? await client.emailAddress()
             await folderChanged()
         } catch { self.error = error.localizedDescription }
@@ -166,7 +174,7 @@ final class AppModel {
         guard client != nil else { return }
         loading = true; defer { loading = false }
         do {
-            rows = try await fetchRows(labelID: labelID(for: folder), max: 40)
+            rows = try await fetchRows(labelID: labelID(for: folder), max: 40, hydrate: false)
             selectFirstIfNeeded()
             scheduleEnqueue()
             error = nil
@@ -186,21 +194,53 @@ final class AppModel {
         }
     }
 
-    /// Lists threads then fetches their metadata concurrently, keeping the server's order.
-    private func fetchRows(labelID: String, max: Int) async throws -> [ThreadRow] {
+    /// Lists threads as placeholder rows (the list call already carries each snippet). Headers are fetched
+    /// later, only for rows on screen, unless `hydrate` asks for them now.
+    private func fetchRows(labelID: String, max: Int, hydrate: Bool) async throws -> [ThreadRow] {
         guard let client else { return [] }
         let refs = try await client.listThreads(labelIDs: [labelID], max: max)
-        var fetched: [String: GmailThread] = [:]
-        try await withThrowingTaskGroup(of: GmailThread.self) { group in
-            for ref in refs { group.addTask { try await client.thread(ref.id) } }
-            for try await t in group { fetched[t.id] = t }
+        var result = refs.map {
+            ThreadRow(id: $0.id, subject: "", from: "", snippet: $0.snippet ?? "", date: nil, unread: false, loaded: false)
         }
-        return refs.compactMap { ref in
-            guard let t = fetched[ref.id], let last = t.messages?.last else { return nil }
-            return ThreadRow(id: t.id, subject: last.subject, from: last.from,
-                             snippet: ref.snippet ?? "", date: last.date,
-                             unread: t.messages?.contains { $0.isUnread } ?? false)
+        if hydrate {
+            let threads = await fetchThreads(result.map(\.id))
+            result = result.map { Self.row(for: threads[$0.id], placeholder: $0) }
         }
+        return result
+    }
+
+    /// Fetches a few threads at a time. Gmail bills per request, and the cache makes repeats free.
+    private func fetchThreads(_ ids: [String]) async -> [String: GmailThread] {
+        guard let client else { return [:] }
+        var result: [String: GmailThread] = [:]
+        for start in stride(from: 0, to: ids.count, by: 4) {
+            let chunk = ids[start..<min(start + 4, ids.count)]
+            await withTaskGroup(of: (String, GmailThread?).self) { group in
+                for id in chunk { group.addTask { (id, try? await client.thread(id)) } }
+                for await (id, thread) in group {
+                    if let thread { result[id] = thread } else { failed.insert(id) }
+                }
+            }
+        }
+        return result
+    }
+
+    private static func row(for thread: GmailThread?, placeholder: ThreadRow) -> ThreadRow {
+        guard let thread, let last = thread.messages?.last else { return placeholder }
+        return ThreadRow(id: thread.id, subject: last.subject, from: last.from, snippet: placeholder.snippet,
+                         date: last.date, unread: thread.messages?.contains { $0.isUnread } ?? false)
+    }
+
+    /// Fills in headers for the rows on screen that don't have them yet.
+    private func hydrateVisible() async {
+        let ids = rows.filter { !$0.loaded && visible.contains($0.id) && !failed.contains($0.id) }.map(\.id)
+        guard !ids.isEmpty else { return }
+        for (id, thread) in await fetchThreads(ids) { apply(thread, id: id) }
+    }
+
+    private func apply(_ thread: GmailThread, id: String) {
+        guard let i = rows.firstIndex(where: { $0.id == id }) else { return }
+        rows[i] = Self.row(for: thread, placeholder: rows[i])
     }
 
     private func loadDetail() async {
@@ -210,6 +250,7 @@ final class AppModel {
             let thread = try await client.thread(id, full: true)
             guard selection == id else { return }   // The user has already moved on.
             detail = thread
+            apply(thread, id: id)
             if aiFolder && !isDone(id) { prioritize(id) }
         } catch { if selection == id { self.error = error.localizedDescription } }
     }
@@ -266,6 +307,8 @@ final class AppModel {
 
     /// Refresh, and retry the connection if it never came up (for example, the Gmail API was off).
     func refresh() async {
+        await cache?.invalidateAll()
+        failed = []
         if client == nil && signedIn {
             error = nil
             if demo { await startDemo() } else { await connect() }
@@ -296,8 +339,9 @@ final class AppModel {
         enqueueTask?.cancel()
         enqueueTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(300))
-            guard !Task.isCancelled else { return }
-            self?.enqueueVisible()
+            guard !Task.isCancelled, let self else { return }
+            await self.hydrateVisible()
+            self.enqueueVisible()
         }
     }
 
@@ -305,7 +349,7 @@ final class AppModel {
     /// Anything that scrolled out of view before its turn is dropped from the queue.
     private func enqueueVisible() {
         guard aiFolder else { return }
-        var ids = rows.map(\.id).filter { visible.contains($0) && !isDone($0) && !inflight.contains($0) }
+        var ids = rows.map(\.id).filter { visible.contains($0) && !isDone($0) && !inflight.contains($0) && !failed.contains($0) }
         if let selection, !isDone(selection), !inflight.contains(selection) {
             ids.removeAll { $0 == selection }
             ids.insert(selection, at: 0)
@@ -349,7 +393,8 @@ final class AppModel {
             pending.removeAll()   // The model isn't there; don't retry it for every row.
             aiNote = unavailable.localizedDescription
         } catch {
-            if id == selection { aiNote = error.localizedDescription }   // Skip this thread; carry on with the rest.
+            failed.insert(id)   // Skip this thread from now on; carry on with the rest.
+            if id == selection { aiNote = error.localizedDescription }
         }
     }
 
@@ -358,6 +403,7 @@ final class AppModel {
         guard let id = selection else { return }
         if folder == .bucket(.project) { plans[id] = nil } else { suggestions[id] = nil }
         aiNote = nil
+        failed.remove(id)
         prioritize(id)
     }
 
@@ -391,8 +437,8 @@ final class AppModel {
         guard let client else { return }
         loading = true; defer { loading = false }
         do {
-            async let next = fetchRows(labelID: labelIDs[.nextAction] ?? "", max: 12)
-            async let wait = fetchRows(labelID: labelIDs[.waitingFor] ?? "", max: 12)
+            async let next = fetchRows(labelID: labelIDs[.nextAction] ?? "", max: 8, hydrate: true)
+            async let wait = fetchRows(labelID: labelIDs[.waitingFor] ?? "", max: 8, hydrate: true)
             async let count = client.threadCount(labelID: "INBOX")
             (nextActions, waiting, inboxCount) = try await (next, wait, count)
             error = nil
