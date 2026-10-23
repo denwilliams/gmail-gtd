@@ -2,10 +2,10 @@ import Foundation
 
 /// Maps GTD buckets to Gmail label IDs, creating the labels on first use, and files threads between them.
 public actor LabelManager {
-    private let client: GmailClient
+    private let client: any MailService
     private var ids: [GTDBucket: String] = [:]
 
-    public init(client: GmailClient) { self.client = client }
+    public init(client: any MailService) { self.client = client }
 
     public func ensureLabels() async throws -> [GTDBucket: String] {
         if ids.count == GTDBucket.allCases.count { return ids }

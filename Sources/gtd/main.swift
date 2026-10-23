@@ -2,7 +2,7 @@ import Foundation
 import GTDCore
 
 let usage = """
-gtd: Gmail GTD from the terminal
+gtd: Gmail GTD from the terminal (add --demo for sample mail, no sign-in)
 
   gtd login [--client-id ID] [--client-secret S]   Sign in via browser
   gtd logout                                       Forget stored tokens
@@ -42,7 +42,12 @@ func bucketArg(_ s: String?) -> GTDBucket {
     return b
 }
 
-func connect() throws -> (GmailClient, LabelManager) {
+/// `--demo` (or GMAIL_GTD_DEMO=1) runs against in-memory sample mail that resets every run.
+let demoMode = CommandLine.arguments.contains("--demo") || ProcessInfo.processInfo.environment["GMAIL_GTD_DEMO"] == "1"
+let demoService = DemoMailService()
+
+func connect() throws -> (any MailService, LabelManager) {
+    if demoMode { return (demoService, LabelManager(client: demoService)) }
     guard let config = OAuthConfig.load() else { throw GmailError.notConfigured }
     let client = try GmailClient(auth: GmailAuth(config: config))
     return (client, LabelManager(client: client))
@@ -56,7 +61,7 @@ func line(_ t: GmailThread, bucket: GTDBucket? = nil) -> String {
     return "\(flag) \(t.id)  \(from.prefix(24).padding(toLength: 24, withPad: " ", startingAt: 0))  \(m.subject.prefix(60))\(tag)"
 }
 
-func listThreads(labelID: String, limit: Int, client: GmailClient) async throws {
+func listThreads(labelID: String, limit: Int, client: any MailService) async throws {
     let refs = try await client.listThreads(labelIDs: [labelID], max: limit)
     if refs.isEmpty { print("Nothing here."); return }
     for ref in refs { print(line(try await client.thread(ref.id))) }
@@ -76,7 +81,7 @@ func printSuggestion(_ s: TriageSuggestion) {
 }
 
 func run() async throws {
-    var args = Array(CommandLine.arguments.dropFirst())
+    var args = Array(CommandLine.arguments.dropFirst()).filter { $0 != "--demo" }
     guard !args.isEmpty else { print(usage); return }
     let cmd = args.removeFirst()
 
@@ -106,6 +111,7 @@ func run() async throws {
     case "open":
         guard let id = args.first else { fail(usage) }
         let email = try? await connect().0.emailAddress()
+        if demoMode { print("Demo mode: would open \(GmailLinks.thread(id, account: email))"); return }
         let p = Process()
         p.executableURL = URL(filePath: "/usr/bin/open")
         p.arguments = [GmailLinks.thread(id, account: email).absoluteString]
@@ -133,8 +139,9 @@ func run() async throws {
         print("Back in inbox.")
     case "suggest":
         guard let id = args.first else { fail(usage) }
-        let thread = try await connect().0.thread(id, full: true)
-        printSuggestion(try await Triager().suggest(for: thread))
+        let client = try connect().0
+        let thread = try await client.thread(id, full: true)
+        printSuggestion(try await Triager().suggest(for: thread, me: try? await client.emailAddress()))
     case "process":
         try await process(limit: args.first.flatMap(Int.init) ?? 20)
     default:
@@ -147,6 +154,7 @@ func process(limit: Int) async throws {
     let (client, labels) = try connect()
     let refs = try await client.listThreads(labelIDs: ["INBOX"], max: limit)
     let triager = Triager()
+    let myEmail = try? await client.emailAddress()
     for ref in refs {
         let thread = try await client.thread(ref.id, full: true)
         print("\n" + String(repeating: "━", count: 60))
@@ -154,7 +162,7 @@ func process(limit: Int) async throws {
             print("\(m.from)\n\(m.subject)\n\n\(m.plainText.prefix(600))")
         }
         var suggestion: TriageSuggestion?
-        do { suggestion = try await triager.suggest(for: thread); print(); printSuggestion(suggestion!) }
+        do { suggestion = try await triager.suggest(for: thread, me: myEmail); print(); printSuggestion(suggestion!) }
         catch { print("\n(no suggestion: \(error.localizedDescription))") }
 
         while true {

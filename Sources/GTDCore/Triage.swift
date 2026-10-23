@@ -10,6 +10,18 @@ public struct TriageSuggestion: Sendable {
     public var waitingOn: String?
 }
 
+/// Maps the model's answers to a GTD bucket. Plain strings so it works, and is testable, without the model.
+public enum TriageRules {
+    public static func bucket(whoActs: String, kind: String) -> GTDBucket {
+        switch kind {
+        case "informationOnly": return .reference
+        case "optionalIdea": return .someday
+        case "multiStepProject": return .project
+        default: return whoActs == "someoneElse" ? .waitingFor : (whoActs == "nobody" ? .reference : .nextAction)
+        }
+    }
+}
+
 public struct ProjectPlan: Sendable {
     public var summary: String
     public var steps: [String]
@@ -26,19 +38,27 @@ public enum TriageError: Error, LocalizedError {
 #if canImport(FoundationModels)
 
 @Generable
-enum GeneratedBucket: String {
-    case nextAction, waitingFor, someday, reference, project
+enum WhoActs: String {
+    case user, someoneElse, nobody
 }
 
 @Generable
+enum ThreadKind: String {
+    case singleTask, multiStepProject, optionalIdea, informationOnly
+}
+
+/// Small questions the on-device model answers reliably. The bucket itself is chosen in code (`TriageRules`).
+@Generable
 struct GeneratedTriage {
-    @Guide(description: "The GTD bucket. nextAction: the user must do something soon. waitingFor: the user is waiting on someone else. someday: optional or low priority. reference: information to keep, no action. project: needs multiple steps.")
-    var bucket: GeneratedBucket
-    @Guide(description: "One concrete next physical action, starting with a verb, under 12 words. Empty for reference.")
-    var nextAction: String
     @Guide(description: "One or two sentences summarising the thread.")
     var summary: String
-    @Guide(description: "Who the user is waiting on, only for waitingFor. Otherwise empty.")
+    @Guide(description: "Who must act next. user: the user was asked to do, decide, review or reply to something. someoneElse: the user already asked someone else for something and is waiting on them. nobody: no action is needed.")
+    var whoActs: WhoActs
+    @Guide(description: "What the thread is. singleTask: one concrete action. multiStepProject: needs several separate steps over time. optionalIdea: a nice-to-have, newsletter or suggestion with no deadline. informationOnly: receipt, notification, notes or FYI.")
+    var kind: ThreadKind
+    @Guide(description: "One concrete next physical action for the user, starting with a verb, under 12 words. Empty if nobody needs to act.")
+    var nextAction: String
+    @Guide(description: "Name of the person the user is waiting on. Empty unless whoActs is someoneElse.")
     var waitingOn: String
 }
 
@@ -63,15 +83,18 @@ public struct Triager: Sendable {
             throw TriageError.modelUnavailable(String(describing: model.availability))
         }
         let session = LanguageModelSession(instructions: """
-            You triage email for someone using Getting Things Done. Be conservative: \
-            only choose nextAction if the user themself must act.
+            You read email for someone using Getting Things Done. Messages marked (you) were written \
+            by the user. Work out who has the next move and what kind of thread it is. If the last \
+            message was written by someone else and asks the user for anything, the user must act.
             """)
-        let result = try await session.respond(to: Self.prompt(for: thread), generating: GeneratedTriage.self)
+        let result = try await session.respond(to: Self.prompt(for: thread, me: me), generating: GeneratedTriage.self)
         let t = result.content
+        let bucket = TriageRules.bucket(whoActs: t.whoActs.rawValue, kind: t.kind.rawValue)
         return TriageSuggestion(
-            bucket: GTDBucket(rawValue: t.bucket.rawValue) ?? .reference,
-            nextAction: t.nextAction, summary: t.summary,
-            waitingOn: t.waitingOn.isEmpty ? nil : t.waitingOn)
+            bucket: bucket,
+            nextAction: bucket == .nextAction || bucket == .project ? t.nextAction : "",
+            summary: t.summary,
+            waitingOn: bucket == .waitingFor && !t.waitingOn.isEmpty ? t.waitingOn : nil)
     }
 
     /// Short digest of what needs attention, built from already-fetched subjects and snippets.
@@ -97,19 +120,22 @@ public struct Triager: Sendable {
         return ProjectPlan(summary: r.content.summary, steps: r.content.steps)
     }
 
-    static func prompt(for thread: GmailThread) -> String {
+    static func prompt(for thread: GmailThread, me: String? = nil) -> String {
         // Newest messages first, quoted replies dropped, until the budget is spent.
         var budget = maxChars
         var chunks: [String] = []
+        let isMine = { (m: GmailMessage) in me.map { m.from.localizedCaseInsensitiveContains($0) } ?? false }
         for m in (thread.messages ?? []).reversed() {
             let body = m.plainText.split(separator: "\n", omittingEmptySubsequences: true)
                 .filter { !$0.hasPrefix(">") }.joined(separator: "\n")
-            let chunk = "From: \(m.from)\nSubject: \(m.subject)\n\(body.prefix(max(0, min(budget, 2500))))"
+            let chunk = "From: \(m.from)\(isMine(m) ? " (you)" : "")\nSubject: \(m.subject)\n\(body.prefix(max(0, min(budget, 2500))))"
             budget -= chunk.count
             chunks.append(chunk)
             if budget <= 0 { break }
         }
-        return "Triage this email thread (newest message first):\n\n" + chunks.joined(separator: "\n---\n")
+        let lastBy = thread.messages?.last.map { isMine($0) ? "the user" : "someone else" } ?? "unknown"
+        return "Triage this email thread (newest message first). The last message was sent by \(lastBy).\n\n"
+            + chunks.joined(separator: "\n---\n")
     }
 }
 

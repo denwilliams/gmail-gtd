@@ -12,6 +12,19 @@ GTD buckets are Gmail labels: `GTD/Next Action`, `GTD/Waiting For`, `GTD/Someday
 `GTD/Reference`, `GTD/Project`. Filing a thread archives it from the inbox and swaps the
 label, so it works in the Gmail web UI too.
 
+## Demo mode
+
+No Google account or sign-in needed. Demo mode loads a fictional mailbox (20 inbox threads plus
+filed Next Actions, Waiting For, Projects, Someday and Reference) and every action works:
+filing, archiving, completing, un-filing and Open in Gmail (which shows the link instead of
+opening it). The on-device model runs on the sample mail like it would on real mail.
+Everything lives in memory, so relaunching resets it.
+
+```sh
+swift run GmailGTD --demo        # or press "Try Demo" on the sign-in screen
+swift run gtd --demo process     # CLI; each command starts from a fresh mailbox
+```
+
 ## Setup
 
 1. In Google Cloud (inside your Workspace org), create a project and enable the **Gmail API**.

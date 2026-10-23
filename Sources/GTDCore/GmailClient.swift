@@ -1,7 +1,28 @@
 import Foundation
 
+/// What the app needs from a mail backend: the real Gmail API or the in-memory demo.
+public protocol MailService: Sendable {
+    func listThreads(labelIDs: [String], query: String?, max: Int) async throws -> [ThreadRef]
+    func thread(_ id: String, full: Bool) async throws -> GmailThread
+    func labels() async throws -> [GmailLabel]
+    func createLabel(_ name: String) async throws -> GmailLabel
+    func modifyThread(_ id: String, add: [String], remove: [String]) async throws
+    func threadCount(labelID: String) async throws -> Int
+    func emailAddress() async throws -> String
+}
+
+extension MailService {
+    public func listThreads(labelIDs: [String], max: Int) async throws -> [ThreadRef] {
+        try await listThreads(labelIDs: labelIDs, query: nil, max: max)
+    }
+    public func thread(_ id: String) async throws -> GmailThread { try await thread(id, full: false) }
+    public func modifyThread(_ id: String, remove: [String]) async throws {
+        try await modifyThread(id, add: [], remove: remove)
+    }
+}
+
 /// Thin Gmail REST client. Refreshes the access token as needed.
-public actor GmailClient {
+public actor GmailClient: MailService {
     private let auth: GmailAuth
     private var tokens: Tokens
     private let base = URL(string: "https://gmail.googleapis.com/gmail/v1/users/me")!
@@ -12,7 +33,7 @@ public actor GmailClient {
         self.tokens = tokens
     }
 
-    public func listThreads(labelIDs: [String] = [], query: String? = nil, max: Int = 50) async throws -> [ThreadRef] {
+    public func listThreads(labelIDs: [String], query: String?, max: Int) async throws -> [ThreadRef] {
         var items = [URLQueryItem(name: "maxResults", value: String(max))]
         items += labelIDs.map { URLQueryItem(name: "labelIds", value: $0) }
         if let query { items.append(.init(name: "q", value: query)) }
@@ -31,7 +52,7 @@ public actor GmailClient {
         return profile.emailAddress
     }
 
-    public func thread(_ id: String, full: Bool = false) async throws -> GmailThread {
+    public func thread(_ id: String, full: Bool) async throws -> GmailThread {
         var items = [URLQueryItem(name: "format", value: full ? "full" : "metadata")]
         if !full { items += ["Subject", "From", "Date"].map { .init(name: "metadataHeaders", value: $0) } }
         return try await get("threads/\(id)", items)
@@ -48,7 +69,7 @@ public actor GmailClient {
         ])
     }
 
-    public func modifyThread(_ id: String, add: [String] = [], remove: [String] = []) async throws {
+    public func modifyThread(_ id: String, add: [String], remove: [String]) async throws {
         let _: GmailThread = try await send("threads/\(id)/modify", method: "POST",
                                             body: ["addLabelIds": add, "removeLabelIds": remove])
     }

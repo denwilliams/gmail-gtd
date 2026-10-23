@@ -23,8 +23,12 @@ struct SignInView: View {
                 SecureField("Client secret (optional)", text: $model.clientSecret)
             }
             .frame(width: 420)
-            Button("Sign In") { Task { await model.signIn() } }
-                .buttonStyle(.borderedProminent).controlSize(.large)
+            HStack {
+                Button("Sign In") { Task { await model.signIn() } }
+                    .buttonStyle(.borderedProminent).controlSize(.large)
+                Button("Try Demo") { Task { await model.startDemo() } }
+                    .controlSize(.large)
+            }
             if let error = model.error { Text(error).foregroundStyle(.red).font(.callout) }
         }
         .padding(40)
@@ -60,6 +64,16 @@ struct MailView: View {
         .safeAreaInset(edge: .bottom) {
             if let error = model.error {
                 Text(error).font(.callout).foregroundStyle(.red).padding(8).frame(maxWidth: .infinity).background(.bar)
+            } else if let notice = model.notice {
+                HStack {
+                    Text(notice).font(.callout).foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Dismiss") { model.notice = nil }.buttonStyle(.link)
+                }
+                .padding(8).background(.bar)
+            } else if model.demo {
+                Text("Demo mode: sample mail, resets on relaunch").font(.caption).foregroundStyle(.secondary)
+                    .padding(6).frame(maxWidth: .infinity).background(.bar)
             }
         }
         .toolbar {

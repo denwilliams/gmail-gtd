@@ -42,7 +42,9 @@ struct ThreadRow: Identifiable, Hashable {
 final class AppModel {
     var clientID = OAuthConfig.load()?.clientID ?? ""
     var clientSecret = OAuthConfig.load()?.clientSecret ?? ""
-    var signedIn = TokenStore.load() != nil
+    var signedIn = TokenStore.load() != nil || AppModel.launchedInDemo
+    var demo = false
+    var notice: String?
     var folder: Folder = .today { didSet { Task { await folderChanged() } } }
     var rows: [ThreadRow] = []
     var selection: String? { didSet { Task { await loadDetail() } } }
@@ -63,7 +65,7 @@ final class AppModel {
     var plans: [String: ProjectPlan] = [:]
     var planning = false
 
-    private var client: GmailClient?
+    private var client: (any MailService)?
     private var labels: LabelManager?
     private var labelIDs: [GTDBucket: String] = [:]
     private var email: String?
@@ -71,9 +73,23 @@ final class AppModel {
 
     // MARK: - Session
 
+    /// Demo mode runs against in-memory sample mail: `--demo` or GMAIL_GTD_DEMO=1.
+    static var launchedInDemo: Bool {
+        CommandLine.arguments.contains("--demo") || ProcessInfo.processInfo.environment["GMAIL_GTD_DEMO"] == "1"
+    }
+
     func start() async {
+        if Self.launchedInDemo { await startDemo(); return }
         guard signedIn else { return }
         await connect()
+    }
+
+    /// Fresh sample mailbox each time; nothing is persisted, so relaunching resets it.
+    func startDemo() async {
+        error = nil
+        demo = true
+        signedIn = true
+        await connect(using: DemoMailService())
     }
 
     func signIn() async {
@@ -89,15 +105,19 @@ final class AppModel {
     }
 
     func signOut() {
-        TokenStore.clear()
+        if !demo { TokenStore.clear() }
+        demo = false; notice = nil
         signedIn = false; client = nil; labels = nil; email = nil
         rows = []; detail = nil; selection = nil; nextActions = []; waiting = []; digest = nil
     }
 
     private func connect() async {
         guard let config = OAuthConfig.load() else { error = GmailError.notConfigured.localizedDescription; return }
+        do { await connect(using: try GmailClient(auth: GmailAuth(config: config))) } catch { self.error = error.localizedDescription }
+    }
+
+    private func connect(using client: any MailService) async {
         do {
-            let client = try GmailClient(auth: GmailAuth(config: config))
             let labels = LabelManager(client: client)
             labelIDs = try await labels.ensureLabels()
             self.client = client; self.labels = labels
@@ -155,7 +175,7 @@ final class AppModel {
     func suggestForSelected() async {
         guard let detail else { return }
         suggesting = true; defer { suggesting = false }
-        do { suggestion = try await triager.suggest(for: detail) } catch { self.error = error.localizedDescription }
+        do { suggestion = try await triager.suggest(for: detail, me: email) } catch { self.error = error.localizedDescription }
     }
 
     func fileSelected(into bucket: GTDBucket) async {
@@ -224,11 +244,11 @@ final class AppModel {
 
     // MARK: - Gmail links
 
-    func openInGmail(_ threadID: String) {
-        NSWorkspace.shared.open(GmailLinks.thread(threadID, account: email))
-    }
+    func openInGmail(_ threadID: String) { open(GmailLinks.thread(threadID, account: email)) }
 
-    func openGmail() {
-        NSWorkspace.shared.open(GmailLinks.inbox(account: email))
+    func openGmail() { open(GmailLinks.inbox(account: email)) }
+
+    private func open(_ url: URL) {
+        if demo { notice = "Demo mode: this would open \(url.absoluteString)" } else { NSWorkspace.shared.open(url) }
     }
 }
