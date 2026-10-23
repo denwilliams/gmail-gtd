@@ -64,12 +64,12 @@ import Foundation
     #expect(!(try await demo.listThreads(labelIDs: [ids[.nextAction]!], max: 50)).contains { $0.id == "in01" })
 }
 
-@Test func completeAndUnfile() async throws {
+@Test func archiveAndUnfile() async throws {
     let demo = DemoMailService()
     let labels = LabelManager(client: demo)
     let ids = try await labels.ensureLabels()
     let before = try await demo.threadCount(labelID: ids[.nextAction]!)
-    try await labels.complete(thread: "na01")
+    try await labels.archive(thread: "na01")
     #expect(try await demo.threadCount(labelID: ids[.nextAction]!) == before - 1)
     #expect(try await demo.threadCount(labelID: "INBOX") == 20)   // archived, not returned to the inbox
 

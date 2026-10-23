@@ -435,15 +435,9 @@ final class AppModel {
         } catch { self.error = error.localizedDescription }
     }
 
-    /// Buckets whose threads can be finished: a Next Action done, a Waiting For received, a Project complete.
-    var canComplete: Bool {
-        switch folder {
-        case .bucket(.nextAction), .bucket(.waitingFor), .bucket(.project): true
-        default: false
-        }
-    }
-
-    var doneTitle: String { folder == .bucket(.waitingFor) ? "Received" : "Done" }
+    /// Any filed thread can be archived: finished with, out of every view, still found by search.
+    /// (Keeping it visible is a different choice: file it as Reference.)
+    var canArchive: Bool { currentBucket != nil }
 
     /// The bucket being viewed, if any.
     var currentBucket: GTDBucket? {
@@ -451,11 +445,11 @@ final class AppModel {
         return nil
     }
 
-    /// Finishes the open thread: clears its GTD label and leaves it archived (the same as ticking it on Today).
-    func completeSelected() async {
-        guard canComplete, let labels, let id = selection else { return }
+    /// Archives the open thread: clears its GTD label and leaves it out of the inbox (the same as ticking it on Today).
+    func archiveSelected() async {
+        guard canArchive, let labels, let id = selection else { return }
         do {
-            try await labels.complete(thread: id)
+            try await labels.archive(thread: id)
             nextActions.removeAll { $0.id == id }
             waiting.removeAll { $0.id == id }
             removeRow(id)
@@ -502,10 +496,10 @@ final class AppModel {
     }
 
     /// Ticks off a Next Action: clears its GTD label and leaves it archived.
-    func complete(_ row: ThreadRow) async {
+    func archive(_ row: ThreadRow) async {
         guard let labels else { return }
         do {
-            try await labels.complete(thread: row.id)
+            try await labels.archive(thread: row.id)
             nextActions.removeAll { $0.id == row.id }
             waiting.removeAll { $0.id == row.id }
         } catch { self.error = error.localizedDescription }

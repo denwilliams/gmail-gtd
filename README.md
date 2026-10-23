@@ -54,4 +54,4 @@ swift run gtd process                               # walk the inbox
   context window.
 - The model runs automatically on the open inbox thread, but nothing is filed until you accept.
 - Compose and reply aren't built yet; use Open in Gmail.
-- Keys in the app: `1`-`6` file into a bucket, `0` back to inbox, `⌘1`-`⌘6` go to a bucket, `⌘0` Inbox, `⌘T` Today, `A` accept, `R` regenerate, `O` open in Gmail. Hold `⌘` for the full list. Suggestions generate automatically for the open inbox thread (and plans for projects); Regenerate re-runs one.
+- Keys in the app: `1`-`6` file into a bucket, `0` back to inbox, `⌘1`-`⌘6` go to a bucket, `⌘0` Inbox, `⌘T` Today, `A` accept, `E` archive (finished with it), `R` regenerate, `O` open in Gmail. Hold `⌘` for the full list. Suggestions generate automatically for the open inbox thread (and plans for projects); Regenerate re-runs one.

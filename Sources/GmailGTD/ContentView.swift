@@ -254,11 +254,16 @@ struct BucketBar: View {
     var body: some View {
         let tint = model.currentBucket?.color ?? .accentColor
         HStack {
-            if model.canComplete {
-                Button { Task { await model.completeSelected() } } label: {
-                    Label(model.doneTitle, systemImage: "checkmark.circle")
+            // Two ways to be finished with a thread: archive it, or keep it where you can find it.
+            Button { Task { await model.archiveSelected() } } label: {
+                Label("Archive", systemImage: "archivebox")
+            }
+            .buttonStyle(.borderedProminent).tint(tint)
+            if model.currentBucket != .reference {
+                Button { Task { await model.fileSelected(into: .reference) } } label: {
+                    Label("Reference", systemImage: Folder.bucket(.reference).symbol)
                 }
-                .buttonStyle(.borderedProminent).tint(tint)
+                .buttonStyle(BucketButtonStyle(color: GTDBucket.reference.color))
             }
             Menu {
                 ForEach(GTDBucket.allCases.filter { $0 != model.currentBucket }, id: \.self) { b in
@@ -394,8 +399,8 @@ struct TodayView: View {
                             if model.nextActions.isEmpty { Text("None").foregroundStyle(.secondary) }
                             ForEach(model.nextActions) { row in
                                 HStack {
-                                    Button { Task { await model.complete(row) } } label: { Image(systemName: "circle") }
-                                        .buttonStyle(.plain).help("Mark done")
+                                    Button { Task { await model.archive(row) } } label: { Image(systemName: "circle") }
+                                        .buttonStyle(.plain).help("Done: archives the thread (file it as Reference to keep it visible)")
                                     Text(row.subject).lineLimit(1)
                                     Spacer()
                                     Text(row.from.displayName)
@@ -478,8 +483,12 @@ struct ProjectDetailView: View {
                 HStack {
                     Text(thread.messages?.last?.subject ?? "").font(.title2.bold()).lineLimit(1)
                     Spacer()
-                    Button { Task { await model.completeSelected() } } label: { Label(model.doneTitle, systemImage: "checkmark.circle") }
+                    Button { Task { await model.archiveSelected() } } label: { Label("Archive", systemImage: "archivebox") }
                         .buttonStyle(.borderedProminent).tint(GTDBucket.project.color)
+                    Button { Task { await model.fileSelected(into: .reference) } } label: {
+                        Label("Reference", systemImage: Folder.bucket(.reference).symbol)
+                    }
+                    .buttonStyle(BucketButtonStyle(color: GTDBucket.reference.color))
                     if model.planning { ProgressView().controlSize(.small) }
                     Button("Regenerate", systemImage: "sparkles") { model.regenerateSelected() }
                         .disabled(model.planning)
@@ -538,7 +547,8 @@ struct KeyHintBar: View {
                 hint(["1", "–", "6"], "file")
                 hint(["A"], "accept")
             } else {
-                if model.canComplete { hint(["D"], model.doneTitle.lowercased()) }
+                if model.canArchive { hint(["E"], "archive") }
+                hint(["4"], "reference")
                 hint(["1", "–", "6"], "move to")
             }
             hint(["\u{2318}", "1", "–", "6"], "go to")
@@ -575,7 +585,7 @@ struct ShortcutHUD: View {
                 ])
                 group("Thread", [
                     (["A"], "Accept the suggestion (Inbox)", nil),
-                    (["D"], "Done: finish a Next Action, Waiting For or Project", nil),
+                    (["E"], "Archive: finished with it, still searchable", nil),
                     (["R"], "Regenerate the suggestion", nil),
                     (["O"], "Open in Gmail", nil),
                     (["\u{2318}", "/"], "Pin or hide this list", nil),
