@@ -317,11 +317,44 @@ struct BucketBar: View {
             .fixedSize()
             Spacer()
             if model.suggesting { ProgressView().controlSize(.small) }
-            Button("Regenerate", systemImage: "sparkles") { model.regenerateSelected() }
+            Button { model.regenerateSelected() } label: { Label("Regenerate", systemImage: "sparkles").labelStyle(.iconOnly) }
+                .help("Regenerate the summary (R)")
                 .disabled(model.suggesting)
-            Button("Open in Gmail", systemImage: "arrow.up.forward.square") { model.openInGmail(threadID) }
+            Button { model.openInGmail(threadID) } label: { Label("Open in Gmail", systemImage: "arrow.up.forward.square").labelStyle(.iconOnly) }
+                .help("Open in Gmail (O)")
         }
         .padding(10)
+    }
+}
+
+/// The seven bucket buttons in whichever form fits: full names, short names, then numbers only.
+struct BucketButtons: View {
+    @Environment(AppModel.self) private var model
+
+    private enum Form { case full, short, numbers }
+
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            row(.full)
+            row(.short)
+            row(.numbers)
+        }
+    }
+
+    private func row(_ form: Form) -> some View {
+        HStack(spacing: 6) {
+            ForEach(GTDBucket.allCases, id: \.self) { b in
+                Button { Task { await model.fileSelected(into: b) } } label: {
+                    switch form {
+                    case .full: Text(verbatim: "\(b.shortcut) \(b.title)")
+                    case .short: Text(verbatim: "\(b.shortcut) \(b.shortTitle)")
+                    case .numbers: Text(verbatim: String(b.shortcut))
+                    }
+                }
+                .buttonStyle(BucketButtonStyle(color: b.color))
+                .help(Text(verbatim: "\(b.title) (\(b.shortcut))"))
+            }
+        }
     }
 }
 
@@ -331,15 +364,15 @@ struct TriageBar: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                ForEach(GTDBucket.allCases, id: \.self) { b in
-                    Button { Task { await model.fileSelected(into: b) } } label: { Text(verbatim: "\(b.shortcut) \(b.title)") }
-                        .buttonStyle(BucketButtonStyle(color: b.color))
-                }
-                Spacer()
-                Button("Regenerate", systemImage: "sparkles") { model.regenerateSelected() }
+            HStack(spacing: 8) {
+                BucketButtons()
+                Spacer(minLength: 0)
+                // Secondary actions are icons, so the bucket buttons get the room.
+                Button { model.regenerateSelected() } label: { Label("Regenerate", systemImage: "sparkles").labelStyle(.iconOnly) }
+                    .help("Regenerate the summary and suggestion (R)")
                     .disabled(model.suggesting)
-                Button("Open in Gmail", systemImage: "arrow.up.forward.square") { model.openInGmail(threadID) }
+                Button { model.openInGmail(threadID) } label: { Label("Open in Gmail", systemImage: "arrow.up.forward.square").labelStyle(.iconOnly) }
+                    .help("Open in Gmail (O)")
             }
             if model.suggesting && model.suggestion == nil {
                 HStack(spacing: 8) { ProgressView().controlSize(.small); Text("Reading thread…").foregroundStyle(.secondary) }

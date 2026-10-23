@@ -28,7 +28,7 @@ struct GmailGTDApp: App {
         WindowGroup("Gmail GTD") {
             ContentView()
                 .environment(model)
-                .frame(minWidth: 900, minHeight: 560)
+                .frame(minWidth: 1000, minHeight: 560)
                 .task { await model.start() }
         }
         .commands {
