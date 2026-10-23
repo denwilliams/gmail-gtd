@@ -186,11 +186,14 @@ struct TriageBar: View {
                     Button { Task { await model.fileSelected(into: b) } } label: { Text(verbatim: "\(b.shortcut) \(b.title)") }
                 }
                 Spacer()
-                Button(model.suggesting ? "Thinking…" : "Suggest", systemImage: "sparkles") {
-                    Task { await model.suggestForSelected() }
-                }
-                .disabled(model.suggesting)
+                Button("Regenerate", systemImage: "sparkles") { model.regenerateSelected() }
+                    .disabled(model.suggesting)
                 Button("Open in Gmail", systemImage: "arrow.up.forward.square") { model.openInGmail(threadID) }
+            }
+            if model.suggesting && model.suggestion == nil {
+                HStack(spacing: 8) { ProgressView().controlSize(.small); Text("Reading thread…").foregroundStyle(.secondary) }
+            } else if let note = model.aiNote, model.suggestion == nil {
+                Text(note).font(.caption).foregroundStyle(.secondary)
             }
             if let s = model.suggestion {
                 HStack(alignment: .top) {
@@ -318,11 +321,15 @@ struct ProjectDetailView: View {
                 HStack {
                     Text(thread.messages?.last?.subject ?? "").font(.title2.bold()).lineLimit(1)
                     Spacer()
-                    Button(model.planning ? "Thinking…" : "Plan", systemImage: "sparkles") { Task { await model.planSelected() } }
+                    if model.planning { ProgressView().controlSize(.small) }
+                    Button("Regenerate", systemImage: "sparkles") { model.regenerateSelected() }
                         .disabled(model.planning)
                     Button("Open in Gmail", systemImage: "arrow.up.forward.square") { model.openInGmail(thread.id) }
                 }
                 .padding(10)
+                if let note = model.aiNote, model.plans[thread.id] == nil {
+                    Text(note).font(.caption).foregroundStyle(.secondary).padding(.horizontal, 10)
+                }
                 if let plan = model.plans[thread.id] {
                     GroupBox {
                         VStack(alignment: .leading, spacing: 6) {

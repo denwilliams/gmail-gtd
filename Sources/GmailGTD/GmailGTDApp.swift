@@ -32,7 +32,7 @@ struct GmailGTDApp: App {
                 Button("Back to Inbox") { Task { await model.unfileSelected() } }
                     .keyboardShortcut("0", modifiers: [])
                 Divider()
-                Button("Suggest Bucket") { Task { await model.suggestForSelected() } }
+                Button("Regenerate Suggestion") { model.regenerateSelected() }
                     .keyboardShortcut("s", modifiers: .command)
             }
         }

@@ -49,8 +49,10 @@ final class AppModel {
     var rows: [ThreadRow] = []
     var selection: String? { didSet { Task { await loadDetail() } } }
     var detail: GmailThread?
-    var suggestion: TriageSuggestion?
+    var suggestions: [String: TriageSuggestion] = [:]
     var suggesting = false
+    var aiNote: String?   // Why the on-device model produced nothing, shown inline rather than as an error.
+    var suggestion: TriageSuggestion? { selection.flatMap { suggestions[$0] } }
     var loading = false
     var error: String?
 
@@ -70,6 +72,8 @@ final class AppModel {
     private var labelIDs: [GTDBucket: String] = [:]
     private var email: String?
     private let triager = Triager()
+    private var aiTask: Task<Void, Never>?
+    private var aiGeneration = 0
 
     // MARK: - Session
 
@@ -175,15 +179,54 @@ final class AppModel {
     }
 
     private func loadDetail() async {
-        suggestion = nil
+        aiTask?.cancel()
+        aiGeneration += 1
+        suggesting = false; planning = false; aiNote = nil
         guard let client, let id = selection else { detail = nil; return }
-        do { detail = try await client.thread(id, full: true) } catch { self.error = error.localizedDescription }
+        do {
+            let thread = try await client.thread(id, full: true)
+            guard selection == id else { return }   // The user has already moved on.
+            detail = thread
+            autoGenerate(for: thread)
+        } catch { if selection == id { self.error = error.localizedDescription } }
     }
 
-    func suggestForSelected() async {
+    // MARK: - On-device AI
+
+    /// Triage runs on its own for inbox threads, and planning for projects. Results are cached per
+    /// thread, and a short delay lets arrow-key scrolling settle so we don't queue work for every row.
+    private func autoGenerate(for thread: GmailThread) {
+        switch folder {
+        case .inbox: if suggestions[thread.id] != nil { return }
+        case .bucket(.project): if plans[thread.id] != nil { return }
+        default: return
+        }
+        startAI(for: thread, delay: .milliseconds(250))
+    }
+
+    private func startAI(for thread: GmailThread, delay: Duration = .zero) {
+        aiTask?.cancel()
+        aiGeneration += 1
+        let generation = aiGeneration
+        let projects = folder == .bucket(.project)
+        aiNote = nil
+        if projects { planning = true } else { suggesting = true }
+        aiTask = Task { [weak self] in
+            if delay > .zero { try? await Task.sleep(for: delay) }
+            guard !Task.isCancelled, let self else { return }
+            do {
+                if projects { self.plans[thread.id] = try await self.triager.plan(for: thread) }
+                else { self.suggestions[thread.id] = try await self.triager.suggest(for: thread, me: self.email) }
+            } catch is CancellationError {
+            } catch { if generation == self.aiGeneration { self.aiNote = error.localizedDescription } }
+            if generation == self.aiGeneration { self.suggesting = false; self.planning = false }
+        }
+    }
+
+    /// Re-runs the model for the open thread, ignoring any cached result.
+    func regenerateSelected() {
         guard let detail else { return }
-        suggesting = true; defer { suggesting = false }
-        do { suggestion = try await triager.suggest(for: detail, me: email) } catch { self.error = error.localizedDescription }
+        startAI(for: detail)
     }
 
     func fileSelected(into bucket: GTDBucket) async {
@@ -244,11 +287,6 @@ final class AppModel {
 
     // MARK: - Projects
 
-    func planSelected() async {
-        guard let detail, let id = selection else { return }
-        planning = true; defer { planning = false }
-        do { plans[id] = try await triager.plan(for: detail) } catch { self.error = error.localizedDescription }
-    }
 
     // MARK: - Gmail links
 

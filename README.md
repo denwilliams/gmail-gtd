@@ -48,6 +48,6 @@ swift run gtd process                               # walk the inbox
 
 - Requires macOS 26+ for Foundation Models. Threads are trimmed to fit the small on-device
   context window.
-- Suggestions are never applied automatically; accept them with a keypress.
+- The model runs automatically on the open inbox thread, but nothing is filed until you accept.
 - Compose and reply aren't built yet; use Open in Gmail.
-- Keys in the app: `1`-`5` file into a bucket, `0` back to inbox, `⌘S` suggest.
+- Keys in the app: `1`-`5` file into a bucket, `0` back to inbox. Suggestions generate automatically for the open inbox thread (and plans for projects); Regenerate re-runs one.
