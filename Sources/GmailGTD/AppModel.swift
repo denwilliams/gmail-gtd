@@ -100,6 +100,14 @@ final class AppModel {
         categorisationSettings.jevEnabled ? JevStatusPresentation(state: jevState) : nil
     }
 
+    /// Display-only fallback; approval still requires Jev success while Jev is enabled.
+    func inboxBucket(for id: String) -> GTDBucket? {
+        if categorisationSettings.jevEnabled, case .success(let bucket)? = jevResults[id] {
+            return bucket
+        }
+        return localSuggestion(for: id)?.bucket
+    }
+
     func localSuggestion(for id: String) -> TriageSuggestion? {
         store.suggestion(for: id, prompt: categorisationSettings.localPrompt)
     }

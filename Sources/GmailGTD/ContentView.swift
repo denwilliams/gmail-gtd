@@ -214,7 +214,7 @@ struct RowView: View {
                 .redacted(reason: row.loaded ? [] : .placeholder)
             // The on-device summary replaces the raw snippet once it is ready.
             Text(suggestion?.headline ?? row.snippet).font(.caption).foregroundStyle(.secondary).lineLimit(2)
-            if let suggestion { rowTag(for: suggestion) }
+            rowTag(for: suggestion)
         }
         .padding(.vertical, 2)
         .onAppear { model.rowAppeared(row.id) }
@@ -223,18 +223,18 @@ struct RowView: View {
 }
 
 extension RowView {
-    /// The inbox shows where the model would file a thread; a bucket shows what matters inside it.
-    @ViewBuilder fileprivate func rowTag(for suggestion: TriageSuggestion) -> some View {
+    /// The inbox prefers Jev's category; filed buckets keep their on-device action text.
+    @ViewBuilder fileprivate func rowTag(for suggestion: TriageSuggestion?) -> some View {
         switch model.folder {
         case .inbox:
-            BucketChip(bucket: suggestion.bucket)
+            if let bucket = model.inboxBucket(for: row.id) { BucketChip(bucket: bucket) }
         case .bucket(.nextAction):
-            if !suggestion.nextAction.isEmpty {
-                Label(suggestion.nextAction, systemImage: "arrow.right.circle")
+            if let nextAction = suggestion?.nextAction, !nextAction.isEmpty {
+                Label(nextAction, systemImage: "arrow.right.circle")
                     .font(.caption.weight(.medium)).foregroundStyle(GTDBucket.nextAction.color).lineLimit(1)
             }
         case .bucket(.waitingFor):
-            if let who = suggestion.waitingOn {
+            if let who = suggestion?.waitingOn {
                 Label("Waiting on \(who)", systemImage: "hourglass")
                     .font(.caption.weight(.medium)).foregroundStyle(GTDBucket.waitingFor.color).lineLimit(1)
             }
