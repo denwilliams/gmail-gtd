@@ -29,28 +29,24 @@ swift run gtd --demo process     # CLI; each command starts from a fresh mailbox
 
 ## Building the app
 
-`swift run` gives a bare executable. Its Dock icon is drawn at launch, but it isn't a real app. To build
-a proper `GmailGTD.app` with an icon you can double-click or drag to Applications:
+`swift run` gives a bare executable. To build a proper `GmailGTD.app` with an icon, use make:
 
 ```sh
-scripts/make-app.sh            # release build, writes build/GmailGTD.app
-scripts/make-app.sh debug      # faster, for development
-open build/GmailGTD.app --args --demo
+make                  # build build/GmailGTD.app (release)
+make install          # build and install to ~/Applications, replacing any copy, then launch it
+make install OPEN=0   # the same, without launching
+make demo             # open the built app on the demo mailbox
+make test             # run the unit tests
+make help             # list every target
 ```
 
-To build and install to `~/Applications` in one step (it quits a running copy first, replaces it, and launches):
-
-```sh
-scripts/install.sh               # release build, install, launch
-scripts/install.sh --no-open     # install without launching
-scripts/install.sh --debug       # faster debug build
-```
+`make install` quits a running copy first. The targets are thin wrappers around `scripts/make-app.sh` and
+`scripts/install.sh`, which you can also run directly (`--debug` gives a faster build). The bundle is ad-hoc
+signed, which is enough to run on this Mac. Sharing it with other Macs would need a Developer ID signature and
+notarisation. The icon is drawn in code (`Sources/GmailGTD/AppIcon.swift`); the build asks the app to export it
+and turns it into an `.icns`.
 
 `GmailGTD --check-config` prints whether the app can see a saved client ID and Keychain tokens (never the values), which is the first thing to run if a built app says it isn't signed in.
-
-The icon is drawn in code (`Sources/GmailGTD/AppIcon.swift`); the script asks the app to export it and
-turns it into an `.icns`. The bundle is ad-hoc signed, which is enough to run on this Mac. Sharing it
-with other Macs would need a Developer ID signature and notarisation.
 
 ## Setup
 
