@@ -5,17 +5,21 @@ import GTDCore
 @testable import GmailGTD
 
 @Test @MainActor func classificationResultsUseOneRowWhenWideAndWrapWhenNarrow() throws {
+    @ViewBuilder func decisions() -> some View {
+        Label("Jev: Noise", systemImage: Folder.bucket(.noise).symbol)
+        Label("Local model: Reference", systemImage: Folder.bucket(.reference).symbol)
+    }
     func render(width: CGFloat) throws -> NSImage {
-        let view = ClassificationResultsRow {
-            Label("Jev: Noise", systemImage: Folder.bucket(.noise).symbol)
-            Label("Local model: Reference", systemImage: Folder.bucket(.reference).symbol)
-        }.frame(width: width)
+        let view = ClassificationResultsRow { decisions() }.frame(width: width)
         return try #require(ImageRenderer(content: view).nsImage)
     }
     let wide = try render(width: 600)
     let narrow = try render(width: 170)
-    let single = try #require(ImageRenderer(content: Label("Jev: Noise", systemImage: Folder.bucket(.noise).symbol).frame(width: 600)).nsImage)
-    #expect(wide.size.height == single.size.height)  // Different categories share one line.
+    // Compare the same labels: SF Symbols have different intrinsic heights.
+    let horizontal = HStack(alignment: .firstTextBaseline, spacing: 20) { decisions() }
+        .fixedSize(horizontal: true, vertical: false).frame(width: 600)
+    let singleRow = try #require(ImageRenderer(content: horizontal).nsImage)
+    #expect(wide.size.height == singleRow.size.height)  // Different categories share one line.
     #expect(narrow.size.height > wide.size.height)  // No source label is clipped to fit.
 }
 
