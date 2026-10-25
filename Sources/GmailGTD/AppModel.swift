@@ -70,7 +70,7 @@ final class AppModel {
     var signedIn: Bool
     var demo = false
     var notice: String?
-    var folder: Folder = .today { didSet { guard folder != oldValue else { return }; Task { await folderChanged() } } }
+    var folder: Folder = .today { didSet { guard folder != oldValue else { return }; endDeNoiseMode(); Task { await folderChanged() } } }
     var rows: [ThreadRow] = []
     var selection: String? { didSet { guard selection != oldValue else { return }; Task { await loadDetail() } } }
     var detail: GmailThread?
@@ -79,8 +79,12 @@ final class AppModel {
     var detailTab: DetailTab = .original
     private var tabChosenByUser = false
     var aiNote: String?   // Why the on-device model produced nothing, shown inline rather than as an error.
-    var categorisationSettings: CategorisationSettings
-    var showingCategorisationSettings = false
+    var categorisationSettings: CategorisationSettings {
+        didSet { if categorisationSettings != oldValue { endDeNoiseMode() } }
+    }
+    var showingCategorisationSettings = false {
+        didSet { if showingCategorisationSettings { endDeNoiseMode() } }
+    }
     private var categorisationGeneration = UUID()
     private var localFailures: [String: String] = [:]
     private var jevResults: [String: JevState] = [:]
@@ -122,6 +126,7 @@ final class AppModel {
     }
 
     private func invalidateCategorisation() {
+        endDeNoiseMode()
         categorisationGeneration = UUID()
         jevResults = [:]
         jevPending = []
@@ -206,6 +211,88 @@ final class AppModel {
         id.map { pending.contains($0) || inflight.contains($0) || jevPending.contains($0) || jevInflight.contains($0) } ?? false
     }
     func isGenerating(_ id: String) -> Bool { inflight.contains(id) || jevInflight.contains(id) }
+
+    // MARK: - De-noise review
+
+    /// Immutable row content and stable IDs: new arrivals and selection changes never join a batch.
+    struct DeNoiseBatch: Identifiable {
+        let id = UUID()
+        var rows: [ThreadRow]
+    }
+    struct DeNoiseCorrection: Identifiable {
+        let id = UUID()
+        let batchID: UUID
+        let row: ThreadRow
+    }
+    private(set) var deNoiseBatch: DeNoiseBatch?
+    private(set) var deNoiseCorrection: DeNoiseCorrection?
+    static let deNoiseBatchSize = 10
+
+    private func readyApprovalBucket(for id: String) -> GTDBucket? {
+        ApprovalPolicy.bucket(jevEnabled: categorisationSettings.jevEnabled,
+                              local: localSuggestion(for: id), jev: jevResults[id])
+    }
+
+    var deNoiseEligibleRows: [ThreadRow] {
+        guard folder == .inbox else { return [] }
+        var seen: Set<String> = []
+        return rows.filter { $0.loaded && seen.insert($0.id).inserted && readyApprovalBucket(for: $0.id) == .noise }
+    }
+    var canStartDeNoiseMode: Bool {
+        signedIn && client != nil && labels != nil && !loading && !loadingMore &&
+        !showingCategorisationSettings && deNoiseBatch == nil && deNoiseEligibleRows.count >= Self.deNoiseBatchSize
+    }
+
+    func startDeNoiseMode() {
+        guard canStartDeNoiseMode else { return }
+        deNoiseBatch = DeNoiseBatch(rows: Array(deNoiseEligibleRows.prefix(Self.deNoiseBatchSize)))
+        deNoiseCorrection = nil
+    }
+
+    func endDeNoiseMode() {
+        deNoiseCorrection = nil
+        deNoiseBatch = nil
+    }
+
+    private var deNoiseContextIsValid: Bool {
+        guard let batch = deNoiseBatch, signedIn, client != nil, labels != nil,
+              folder == .inbox, !loading, !showingCategorisationSettings else { return false }
+        return batch.rows.allSatisfy { member in
+            rows.contains { $0.id == member.id } && readyApprovalBucket(for: member.id) == .noise
+        }
+    }
+    var canApproveDeNoiseBatch: Bool {
+        deNoiseContextIsValid && deNoiseCorrection == nil && deNoiseBatch?.rows.isEmpty == false
+    }
+
+    func beginDeNoiseCorrection(for id: String) {
+        guard deNoiseContextIsValid, deNoiseCorrection == nil, let batch = deNoiseBatch,
+              let row = batch.rows.first(where: { $0.id == id }) else { return }
+        deNoiseCorrection = DeNoiseCorrection(batchID: batch.id, row: row)
+    }
+
+    func cancelDeNoiseCorrection() { deNoiseCorrection = nil }
+
+    func confirmDeNoiseCorrection(_ bucket: GTDBucket, correctionID: UUID) {
+        guard bucket != .noise, deNoiseContextIsValid, let correction = deNoiseCorrection,
+              correction.id == correctionID, correction.batchID == deNoiseBatch?.id else { return }
+        // Remove only this member, before using the existing optimistic filing and undo pipeline.
+        deNoiseBatch?.rows.removeAll { $0.id == correction.row.id }
+        deNoiseCorrection = nil
+        move(correction.row.id, to: .bucket(bucket), summary: "Moved to \(bucket.title)")
+    }
+
+    func approveDeNoiseBatch(_ batchID: UUID) {
+        guard deNoiseBatch?.id == batchID, deNoiseCorrection == nil else { return }
+        guard canApproveDeNoiseBatch, let batch = deNoiseBatch else {
+            endDeNoiseMode()
+            return
+        }
+        // Consume the snapshot synchronously: repeated clicks and stale view actions cannot file twice
+        // or target a newly started batch. No selection/current-row lookup is used for these moves.
+        endDeNoiseMode()
+        for row in batch.rows { move(row.id, to: .bucket(.noise), summary: "Moved to Noise") }
+    }
 
     // MARK: - Session
 
@@ -294,6 +381,7 @@ final class AppModel {
     // MARK: - Mail folders
 
     func reload() async {
+        endDeNoiseMode()
         guard client != nil else { return }
         loading = true; defer { loading = false }
         do {
@@ -364,6 +452,10 @@ final class AppModel {
         let previous = store.entriesContentKey(for: thread.id)
         store.note(thread, header: Self.header(of: thread))
         if previous != SummaryStore.contentKeyForCategorisation(thread) {
+            if deNoiseBatch?.rows.contains(where: { $0.id == thread.id }) == true {
+                endDeNoiseMode()
+                notice = "De-noise Mode ended because a reviewed thread changed. Start a new batch to review it again."
+            }
             jevResults[thread.id] = nil
             localFailures[thread.id] = nil
         }
@@ -444,6 +536,7 @@ final class AppModel {
 
     /// Refresh, and retry the connection if it never came up (for example, the Gmail API was off).
     func refresh() async {
+        endDeNoiseMode()
         await cache?.invalidateAll()
         failed = []
         planningUnavailable = nil
@@ -635,7 +728,7 @@ final class AppModel {
 
     /// Re-runs the model for the open thread, ignoring any cached result.
     func regenerateSelected() {
-        guard let id = selection, !isQueued(id) else { return }
+        guard deNoiseBatch == nil, let id = selection, !isQueued(id) else { return }
         if folder == .bucket(.project) {
             planningUnavailable = nil
             store.clearPlan(for: id)
@@ -650,7 +743,7 @@ final class AppModel {
     }
 
     func fileSelected(into bucket: GTDBucket) async {
-        guard let id = selection, bucket != currentBucket else { return }   // already there
+        guard deNoiseBatch == nil, let id = selection, bucket != currentBucket else { return }   // already there
         move(id, to: .bucket(bucket), summary: "Moved to \(bucket.title)")
     }
 
@@ -671,7 +764,7 @@ final class AppModel {
     }
 
     func unfileSelected() async {
-        guard let id = selection else { return }
+        guard deNoiseBatch == nil, let id = selection else { return }
         move(id, to: .inbox, summary: "Moved back to Inbox")
     }
 
@@ -685,6 +778,9 @@ final class AppModel {
 
     private func move(_ id: String, to destination: Destination, summary: String) {
         guard let labels, let client else { return }
+        // Batch correction removes its member before moving; any other move of a reviewed member
+        // invalidates the session rather than silently changing what LGTM will do.
+        if deNoiseBatch?.rows.contains(where: { $0.id == id }) == true { endDeNoiseMode() }
         let previous = moveChain
         let before = Task {
             await previous?.value
@@ -769,6 +865,7 @@ final class AppModel {
 
     /// Gmail refused the move: bring the thread back and say so.
     private func moveFailed(_ move: UndoMove, _ error: Error) {
+        endDeNoiseMode()   // Restored failures must be reviewed again, not silently approved.
         undoStack.removeAll { $0.id == move.id }
         if undoToast?.id == move.id { undoToast = nil }
         reinsertLocally(move)
@@ -777,6 +874,7 @@ final class AppModel {
 
     /// Puts the most recently moved thread back, on screen at once and on Gmail in the background.
     func undoLastMove() async {
+        endDeNoiseMode()
         guard let move = undoStack.popLast(), let labels else { return }
         toastTask?.cancel()
         undoToast = nil
@@ -807,7 +905,8 @@ final class AppModel {
 
     func refreshQuietly() async {
         await moveChain?.value   // let our own changes reach Gmail first
-        guard client != nil, !loading, !loadingMore else { return }
+        // Keep the reviewed snapshot stable; explicit Refresh ends the mode and reloads normally.
+        guard deNoiseBatch == nil, client != nil, !loading, !loadingMore else { return }
         if folder == .today { await loadToday(); return }
         // If the user has scrolled through several pages, replacing them would jerk the list; leave it alone.
         guard rows.count <= pageSize + 10 else { return }

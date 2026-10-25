@@ -112,7 +112,7 @@ struct GmailGTDApp: App {
                     Button("Open in Gmail") { model.openSelectedInGmail() }
                         .keyboardShortcut("o", modifiers: [])
                 }
-                .disabled(model.detail == nil || model.showingCategorisationSettings)
+                .disabled(model.detail == nil || model.showingCategorisationSettings || model.deNoiseBatch != nil)
                 Divider()
                 Button("Keyboard Shortcuts") { model.shortcutsPinned.toggle() }
                     .keyboardShortcut("/", modifiers: .command)
