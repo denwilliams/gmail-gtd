@@ -124,6 +124,55 @@ private actor PlanProbe {
     }
 }
 
+@Test(arguments: [true, false], [true, false]) @MainActor
+func todayDoneUndoRestoresActualLabels(initiallyInInbox: Bool, immediateUndo: Bool) async throws {
+    let demo = DemoMailService()
+    let labels = LabelManager(client: demo)
+    let ids = try await labels.ensureLabels()
+    let custom = try await demo.createLabel("Keep me")
+    if initiallyInInbox {
+        // Model newly filed actionable mail; the archived case models existing mail with no INBOX.
+        try await labels.file(thread: "na01", into: .nextAction)
+    }
+    try await demo.modifyThread("na01", add: ["UNREAD", "STARRED", custom.id], remove: [])
+    let before = try await demo.thread("na01", full: true)
+    let beforeMessages = try #require(before.messages)
+    #expect(beforeMessages.allSatisfy { ($0.labelIds ?? []).contains("INBOX") == initiallyInInbox })
+
+    let model = AppModel(signedIn: true, settings: CategorisationSettings(), folder: .today,
+                         loadJevToken: { nil })
+    model.demo = true   // Cleanup must never touch real-account credentials.
+    defer { model.signOut() }
+    await model.connect(using: demo, persist: false)
+    let row = try #require(model.nextActions.first { $0.id == "na01" })
+    #expect(model.selection == nil)
+    #expect(model.detail == nil)   // Today has no open detail to supply the prior labels.
+
+    await model.finish(row)
+    #expect(!model.nextActions.contains { $0.id == row.id })
+    #expect(model.undoStack.count == 1)
+    if !immediateUndo {
+        try await eventually {
+            let thread = try? await demo.thread(row.id, full: true)
+            return thread?.messages?.allSatisfy { ($0.labelIds ?? []).contains(ids[.done]!) } == true
+        }
+        let done = try await demo.thread(row.id, full: true)
+        #expect(done.messages?.allSatisfy { !($0.labelIds ?? []).contains("INBOX") } == true)
+    }
+    await model.undoLastMove()
+    #expect(model.nextActions.contains { $0.id == row.id })
+    #expect(model.undoStack.isEmpty)
+    await model.refreshQuietly()   // Wait for the serialized move and undo to reach the backend.
+
+    let after = try await demo.thread(row.id, full: true)
+    let afterMessages = try #require(after.messages)
+    #expect(afterMessages.map(\.id) == beforeMessages.map(\.id))
+    #expect(afterMessages.map(\.plainText) == beforeMessages.map(\.plainText))
+    #expect(afterMessages.map { Set($0.labelIds ?? []) } == beforeMessages.map { Set($0.labelIds ?? []) })
+    #expect(model.nextActions.contains { $0.id == row.id })
+    #expect(model.error == nil)
+}
+
 @Test func jevPendingPresentationDoesNotRequireLocalSuccess() {
     let states: [JevState?] = [nil, .pending]
     for state in states {
