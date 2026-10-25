@@ -472,6 +472,18 @@ struct SummaryView: View {
 
 // MARK: - Today (E)
 
+private struct NextActionSummaryHelp: ViewModifier {
+    let summary: String?
+
+    @ViewBuilder func body(content: Content) -> some View {
+        if let summary {
+            content.help(Text(verbatim: summary))
+        } else {
+            content
+        }
+    }
+}
+
 struct TodayView: View {
     @Environment(AppModel.self) private var model
 
@@ -509,6 +521,8 @@ struct TodayView: View {
                                     Button { model.openInGmail(row.id) } label: { Image(systemName: "arrow.up.forward.square") }
                                         .buttonStyle(.plain).help("Open in Gmail")
                                 }
+                                .contentShape(Rectangle())
+                                .modifier(NextActionSummaryHelp(summary: model.nextActionSummary(for: row.id)))
                             }
                             Button("View all Next Actions  \u{2318}1") { model.folder = .bucket(.nextAction) }
                                 .buttonStyle(.link).padding(.top, 4)
