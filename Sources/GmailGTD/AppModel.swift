@@ -373,9 +373,10 @@ final class AppModel {
             labelIDs = try await labels.ensureLabels()
             self.client = client; self.cache = client; self.labels = labels
             email = try? await client.emailAddress()
-            corrections = CorrectionStore(fileURL: persist ? email.flatMap { CorrectionStore.fileURL(for: $0) } : nil)
-            if persist && email == nil {
-                notice = "Mailbox identity unavailable: corrections will only be kept for this session."
+            let historyURL = persist ? email.flatMap { CorrectionStore.fileURL(for: $0) } : nil
+            corrections = CorrectionStore(fileURL: historyURL)
+            if persist && historyURL == nil {
+                notice = "Local correction storage unavailable: corrections will only be kept for this session."
             }
             await folderChanged()
         } catch { self.error = error.localizedDescription }

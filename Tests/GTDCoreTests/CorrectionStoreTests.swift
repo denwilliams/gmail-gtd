@@ -15,17 +15,17 @@ private func correction(jevEnabled: Bool = false, local: GTDBucket? = .noise,
 func correctionsFollowActiveApprovalNotFallbackOrOtherModel(jevEnabled: Bool) {
     for local in [GTDBucket.noise, .reference, nil] {
         for jev in [GTDBucket.noise, .reference, nil] {
-    let record = correction(jevEnabled: jevEnabled, local: local, jev: jev)
-    let active = jevEnabled ? jev : local
-    #expect((record != nil) == (active != nil && active != .reference))
-    if let record {
-        #expect(record.localBucket == local)
-        #expect(record.jevBucket == jev)
-        #expect(record.activeSource == (jevEnabled ? .jev : .afm))
-        #expect(record.chosenBucket == .reference)
-        #expect((record.localPrompt != nil) == (local != nil))
-        #expect((record.jevPrompt != nil) == (jev != nil))
-    }
+            let record = correction(jevEnabled: jevEnabled, local: local, jev: jev)
+            let active = jevEnabled ? jev : local
+            #expect((record != nil) == (active != nil && active != .reference))
+            if let record {
+                #expect(record.localBucket == local)
+                #expect(record.jevBucket == jev)
+                #expect(record.activeSource == (jevEnabled ? .jev : .afm))
+                #expect(record.chosenBucket == .reference)
+                #expect((record.localPrompt != nil) == (local != nil))
+                #expect((record.jevPrompt != nil) == (jev != nil))
+            }
         }
     }
 }
