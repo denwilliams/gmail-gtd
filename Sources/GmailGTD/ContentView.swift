@@ -63,10 +63,14 @@ struct MailView: View {
             .navigationSplitViewColumnWidth(min: 170, ideal: 200)
             .focusable(false)
         } detail: {
-            switch model.folder {
-            case .today: TodayView()
-            case .bucket(.project): HStack(spacing: 0) { ProjectListView(focus: $listFocused); Divider(); ProjectDetailView() }
-            default: HStack(spacing: 0) { ThreadListView(focus: $listFocused); Divider(); ThreadDetailView() }
+            if let batch = model.deNoiseBatch {
+                DeNoiseView(batch: batch)
+            } else {
+                switch model.folder {
+                case .today: TodayView()
+                case .bucket(.project): HStack(spacing: 0) { ProjectListView(focus: $listFocused); Divider(); ProjectDetailView() }
+                default: HStack(spacing: 0) { ThreadListView(focus: $listFocused); Divider(); ThreadDetailView() }
+                }
             }
         }
         .navigationTitle(model.folder.title)
@@ -93,7 +97,7 @@ struct MailView: View {
         .animation(.easeOut(duration: 0.18), value: model.undoToast?.id)
         .safeAreaInset(edge: .bottom, spacing: 0) {
             VStack(spacing: 0) {
-                if model.folder != .today { KeyHintBar() }
+                if model.folder != .today && model.deNoiseBatch == nil { KeyHintBar() }
                 StatusBar()
             }
         }
@@ -183,15 +187,27 @@ struct ThreadListView: View {
 
     var body: some View {
         @Bindable var model = model
-        List(selection: $model.selection) {
-            ForEach(model.rows) { row in RowView(row: row).tag(row.id) }
-            if model.loadingMore {
-                ProgressView().controlSize(.small).frame(maxWidth: .infinity).padding(.vertical, 6)
+        VStack(spacing: 0) {
+            if model.folder == .inbox {
+                VStack(alignment: .leading, spacing: 6) {
+                    Button("De-noise Mode", systemImage: "speaker.slash") { model.startDeNoiseMode() }
+                        .disabled(!model.canStartDeNoiseMode)
+                    Text("Requires 10 inbox emails with ready Noise suggestions (\(model.deNoiseEligibleRows.count) ready).")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                .padding(10).frame(maxWidth: .infinity, alignment: .leading)
+                Divider()
             }
+            List(selection: $model.selection) {
+                ForEach(model.rows) { row in RowView(row: row).tag(row.id) }
+                if model.loadingMore {
+                    ProgressView().controlSize(.small).frame(maxWidth: .infinity).padding(.vertical, 6)
+                }
+            }
+            .overlay { if model.loading && model.rows.isEmpty { ProgressView() } }
+            .focused(focus)
         }
-        .overlay { if model.loading && model.rows.isEmpty { ProgressView() } }
         .frame(width: 340)
-        .focused(focus)
     }
 }
 
