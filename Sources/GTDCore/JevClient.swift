@@ -10,7 +10,8 @@ public struct JevClient: Sendable {
     // without assuming English's usual characters/token ratio. Reserve room for provider framing.
     public static let maxRequestBytes = 30_000
 
-    public init(transport: @escaping Transport = { request in
+    public init(transport: Transport? = nil) {
+        self.transport = transport ?? { request in
         // Ephemeral storage avoids caching private mail; never follow redirects with a bearer token.
         let session = URLSession(configuration: .ephemeral, delegate: NoJevRedirects(), delegateQueue: nil)
         defer { session.finishTasksAndInvalidate() }
@@ -19,7 +20,8 @@ public struct JevClient: Sendable {
             throw CategorisationError.message("Jev returned an invalid HTTP response. Retry.")
         }
         return (data, response)
-    }) { self.transport = transport }
+        }
+    }
 
     public func categorise(_ thread: GmailThread, me: String?, prompt: String, token: String) async throws -> GTDBucket {
         let request = try Self.request(thread, me: me, prompt: prompt, token: token)
