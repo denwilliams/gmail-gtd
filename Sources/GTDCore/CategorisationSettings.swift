@@ -57,13 +57,20 @@ public enum CategorisationError: Error, LocalizedError {
 }
 
 public enum JevState: Sendable {
-    case pending, success(GTDBucket), failure(String)
-    public var bucket: GTDBucket? { if case .success(let bucket) = self { bucket } else { nil } }
+    case pending, success(GTDBucket, noiseLikelihood: Double? = nil), failure(String)
+    public var bucket: GTDBucket? { if case .success(let bucket, _) = self { bucket } else { nil } }
+    public var noiseLikelihood: Double? {
+        if case .success(_, let score) = self { NoiseLikelihood.validated(score) } else { nil }
+    }
     public var isFinished: Bool { if case .pending = self { false } else { true } }
 }
 
 /// Shared by the button, keyboard shortcut, and CLI: enabled Jev never silently falls back.
 public enum ApprovalPolicy {
+    public static func noiseLikelihood(jevEnabled: Bool, local: TriageSuggestion?, jev: JevState?) -> Double? {
+        NoiseLikelihood.validated(jevEnabled ? jev?.noiseLikelihood : local?.noiseLikelihood)
+    }
+
     public static func bucket(jevEnabled: Bool, local: TriageSuggestion?, jev: JevState?) -> GTDBucket? {
         jevEnabled ? jev?.bucket : local?.bucket
     }

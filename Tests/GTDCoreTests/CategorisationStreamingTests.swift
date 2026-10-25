@@ -27,7 +27,7 @@ private actor StreamingProbe {
         TriageSuggestion(bucket: .reference, nextAction: "", summary: "Local result.", waitingOn: nil)
     }, remote: { _, _, _, _ in
         await probe.waitUntilLocalIsDisplayed()
-        return .project
+        return JevClassification(bucket: .project)
     })
     let thread = GmailThread(id: "t", historyId: "1", messages: [])
     await categoriser.run(thread, me: nil, settings: settings, token: "test") { await probe.record($0) }

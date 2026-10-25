@@ -22,7 +22,7 @@ func inboxPrefersJevWithOrWithoutLocalResult(localAvailable: Bool) async throws 
     let categoriser = Categoriser(local: { _, _, _ in
         guard localAvailable else { throw InboxCategoryError.unavailable }
         return TriageSuggestion(bucket: .nextAction, nextAction: "Reply", summary: "Local summary.")
-    }, remote: { _, _, _, _ in .noise })
+    }, remote: { _, _, _, _ in JevClassification(bucket: .noise) })
     let model = AppModel(signedIn: true, settings: settings, folder: .inbox,
                          categoriser: categoriser, loadJevToken: { nil })
     model.demo = true
@@ -70,7 +70,7 @@ func inboxFallsBackToLocalWhenJevFailsOrIsDisabled(jevEnabled: Bool) async throw
     let categoriser = Categoriser(local: { _, _, _ in
         TriageSuggestion(bucket: .nextAction, nextAction: "Reply", summary: "Local summary.")
     }, remote: { _, _, _, _ in
-        for await bucket in results { return bucket }
+        for await bucket in results { return JevClassification(bucket: bucket) }
         throw InboxCategoryError.unavailable
     })
     let model = AppModel(signedIn: true, settings: settings, folder: .inbox,

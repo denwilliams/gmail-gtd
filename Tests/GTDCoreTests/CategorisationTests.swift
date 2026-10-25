@@ -64,7 +64,7 @@ private func email(_ body: String = "Please review the document.") throws -> Gma
         return (Data(#"{"answers":{"bucket":{"type":"choice","choice":"nextAction","confidence":0.99}}}"#.utf8),
                 HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
     }
-    #expect(try await client.categorise(email(), me: "me@example.com", prompt: "Custom Jev instructions", token: "test-token") == .nextAction)
+    #expect(try await client.categorise(email(), me: "me@example.com", prompt: "Custom Jev instructions", token: "test-token").bucket == .nextAction)
 }
 
 @Test func jevHasLargerIndependentBudgetAndBoundsEncodedUnicodeInput() throws {
@@ -130,7 +130,7 @@ func jevErrorsDoNotExposeProviderBodiesOrCredentials(_ status: Int) async throws
 @Test func optedOutCategorisationNeverCallsJevEvenWithAToken() async throws {
     let categoriser = Categoriser(local: { _, _, prompt in
         #expect(prompt == TriagePrompts.local); return localSuggestion
-    }, remote: { _, _, _, _ in Issue.record("Opt-out must not call Jev"); return .noise })
+    }, remote: { _, _, _, _ in Issue.record("Opt-out must not call Jev"); return JevClassification(bucket: .noise) })
     let output = await categoriser.evaluate(try email(), me: nil, settings: CategorisationSettings(), token: "stored-token")
     #expect(output.local?.bucket == .reference)
     #expect(output.jev == nil)
@@ -142,7 +142,7 @@ func jevErrorsDoNotExposeProviderBodiesOrCredentials(_ status: Int) async throws
     let categoriser = Categoriser(local: { _, _, prompt in
         #expect(prompt == "LOCAL"); return localSuggestion
     }, remote: { _, _, prompt, token in
-        #expect(prompt == "REMOTE"); #expect(token == "test"); return .nextAction
+        #expect(prompt == "REMOTE"); #expect(token == "test"); return JevClassification(bucket: .nextAction)
     })
     let output = await categoriser.evaluate(try email(), me: nil, settings: settings, token: "test")
     #expect(output.local?.bucket == .reference)
@@ -159,7 +159,7 @@ func jevErrorsDoNotExposeProviderBodiesOrCredentials(_ status: Int) async throws
     #expect(a.jev?.isFinished == true)
     #expect(ApprovalPolicy.bucket(jevEnabled: true, local: a.local, jev: a.jev) == nil)
     let localFailure = Categoriser(local: { _, _, _ in throw TriageError.modelUnavailable("test") },
-                                  remote: { _, _, _, _ in .project })
+                                  remote: { _, _, _, _ in JevClassification(bucket: .project) })
     let b = await localFailure.evaluate(try email(), me: nil, settings: settings, token: "test")
     #expect(b.localError != nil)
     #expect(b.jev?.bucket == .project)

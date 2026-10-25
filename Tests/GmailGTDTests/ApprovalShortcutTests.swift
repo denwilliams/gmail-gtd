@@ -67,7 +67,7 @@ private enum ShortcutTestError: Error { case unavailable }
         TriageSuggestion(bucket: .reference, nextAction: "", summary: "Local summary.")
     }, remote: { _, _, _, _ in
         guard remoteSucceeds else { throw ShortcutTestError.unavailable }
-        return .noise
+        return JevClassification(bucket: .noise)
     }), loadJevToken: { "mock-token" })
     model.demo = true
     await model.connect(using: DemoMailService(), persist: false)

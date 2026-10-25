@@ -22,6 +22,7 @@ struct DeNoiseView: View {
                     .help("Move only the remaining reviewed emails to Noise and out of the inbox.")
             }
             .padding()
+            DeNoiseThresholdControl().padding(.horizontal).padding(.bottom, 10)
             Divider()
             if batch.rows.isEmpty {
                 ContentUnavailableView("No Emails Left", systemImage: "checkmark.circle",
@@ -30,7 +31,7 @@ struct DeNoiseView: View {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 6) {
                         ForEach(batch.rows) { row in
-                            DeNoiseCard(row: row) { model.beginDeNoiseCorrection(for: row.id) }
+                            DeNoiseCard(row: row, noiseLikelihood: batch.estimates[row.id]) { model.beginDeNoiseCorrection(for: row.id) }
                         }
                     }
                     .padding()
@@ -46,9 +47,28 @@ struct DeNoiseView: View {
     }
 }
 
+/// Available before entering review too, including when fewer than ten suggestions qualify.
+struct DeNoiseThresholdControl: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Minimum Noise estimate: \(model.deNoiseThreshold, format: .percent.precision(.fractionLength(0)))")
+                .font(.callout)
+            Slider(value: Binding(get: { model.deNoiseThreshold }, set: { model.setDeNoiseThreshold($0) }),
+                   in: 0...1, step: 0.01) {
+                Text("Minimum Noise estimate")
+            }
+            Text("\(model.categorisationSettings.jevEnabled ? "Jev probability" : "Local AFM self-estimate"). Model estimates, not calibrated accuracy. Missing scores are excluded. Changing this ends the current review.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+}
+
 /// Text yields space to the date and action, even for long mail headers in narrow panes.
 struct DeNoiseCard: View {
     let row: ThreadRow
+    var noiseLikelihood: Double? = nil
     let notNoise: () -> Void
 
     var body: some View {
@@ -70,8 +90,16 @@ struct DeNoiseCard: View {
                 Button("Not Noise", action: notNoise)
                     .fixedSize(horizontal: true, vertical: false)
             }
-            Text(row.snippet).foregroundStyle(.secondary).textSelection(.enabled)
-                .lineLimit(1).truncationMode(.tail)
+            HStack {
+                Text(row.snippet).foregroundStyle(.secondary).textSelection(.enabled)
+                    .lineLimit(1).truncationMode(.tail)
+                if let score = NoiseLikelihood.validated(noiseLikelihood) {
+                    Text("Noise \(score, format: .percent.precision(.fractionLength(0)))")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize()
+                        .help("Model estimate, not calibrated accuracy.")
+                }
+            }
         }
         .padding(.horizontal, 12).padding(.vertical, 8)
         .frame(maxWidth: .infinity, alignment: .leading)

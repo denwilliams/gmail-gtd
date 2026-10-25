@@ -197,7 +197,8 @@ struct ThreadListView: View {
                 VStack(alignment: .leading, spacing: 6) {
                     Button("De-noise Mode", systemImage: "speaker.slash") { model.startDeNoiseMode() }
                         .disabled(!model.canStartDeNoiseMode)
-                    Text("Requires 10 inbox emails with ready Noise suggestions (\(model.deNoiseEligibleRows.count) ready).")
+                    DeNoiseThresholdControl()
+                    Text("Requires 10 scored Noise suggestions at this threshold (\(model.deNoiseEligibleRows.count) ready).")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 .padding(10).frame(maxWidth: .infinity, alignment: .leading)

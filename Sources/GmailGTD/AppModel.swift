@@ -112,7 +112,7 @@ final class AppModel {
 
     /// Display-only fallback; approval still requires Jev success while Jev is enabled.
     func inboxBucket(for id: String) -> GTDBucket? {
-        if categorisationSettings.jevEnabled, case .success(let bucket)? = jevResults[id] {
+        if categorisationSettings.jevEnabled, case .success(let bucket, _)? = jevResults[id] {
             return bucket
         }
         return localSuggestion(for: id)?.bucket
@@ -224,6 +224,7 @@ final class AppModel {
     struct DeNoiseBatch: Identifiable {
         let id = UUID()
         var rows: [ThreadRow]
+        let estimates: [String: Double]
     }
     struct DeNoiseCorrection: Identifiable {
         let id = UUID()
@@ -233,6 +234,30 @@ final class AppModel {
     private(set) var deNoiseBatch: DeNoiseBatch?
     private(set) var deNoiseCorrection: DeNoiseCorrection?
     static let deNoiseBatchSize = 10
+    /// Session-only UI preference. Changing it invalidates the old snapshot, never replaces its members.
+    private(set) var deNoiseThreshold = 0.90
+
+    func setDeNoiseThreshold(_ value: Double) {
+        guard let value = NoiseLikelihood.validated(value) else { return }
+        // Slider steps are whole percentages; normalize floating-point step arithmetic at boundaries.
+        let threshold = (value * 100).rounded() / 100
+        guard threshold != deNoiseThreshold else { return }
+        deNoiseThreshold = threshold
+        if deNoiseBatch != nil {
+            endDeNoiseMode()
+            notice = "Noise threshold changed. Start a new batch and review it before LGTM."
+        }
+    }
+
+    func noiseLikelihood(for id: String) -> Double? {
+        ApprovalPolicy.noiseLikelihood(jevEnabled: categorisationSettings.jevEnabled,
+                                       local: localSuggestion(for: id), jev: jevResults[id])
+    }
+
+    private func qualifiesForDeNoise(_ id: String) -> Bool {
+        NoiseLikelihood.qualifies(bucket: readyApprovalBucket(for: id), score: noiseLikelihood(for: id),
+                                  threshold: deNoiseThreshold)
+    }
 
     private func readyApprovalBucket(for id: String) -> GTDBucket? {
         ApprovalPolicy.bucket(jevEnabled: categorisationSettings.jevEnabled,
@@ -242,7 +267,7 @@ final class AppModel {
     var deNoiseEligibleRows: [ThreadRow] {
         guard folder == .inbox else { return [] }
         var seen: Set<String> = []
-        return rows.filter { $0.loaded && seen.insert($0.id).inserted && readyApprovalBucket(for: $0.id) == .noise }
+        return rows.filter { $0.loaded && seen.insert($0.id).inserted && qualifiesForDeNoise($0.id) }
     }
     var canStartDeNoiseMode: Bool {
         signedIn && client != nil && labels != nil && !loading && !loadingMore &&
@@ -251,7 +276,11 @@ final class AppModel {
 
     func startDeNoiseMode() {
         guard canStartDeNoiseMode else { return }
-        deNoiseBatch = DeNoiseBatch(rows: Array(deNoiseEligibleRows.prefix(Self.deNoiseBatchSize)))
+        let members = Array(deNoiseEligibleRows.prefix(Self.deNoiseBatchSize))
+        let estimates = Dictionary(uniqueKeysWithValues: members.compactMap { row in
+            noiseLikelihood(for: row.id).map { (row.id, $0) }
+        })
+        deNoiseBatch = DeNoiseBatch(rows: members, estimates: estimates)
         deNoiseCorrection = nil
     }
 
@@ -264,7 +293,7 @@ final class AppModel {
         guard let batch = deNoiseBatch, signedIn, client != nil, labels != nil,
               folder == .inbox, !loading, !showingCategorisationSettings else { return false }
         return batch.rows.allSatisfy { member in
-            rows.contains { $0.id == member.id } && readyApprovalBucket(for: member.id) == .noise
+            rows.contains { $0.id == member.id } && qualifiesForDeNoise(member.id)
         }
     }
     var canApproveDeNoiseBatch: Bool {
@@ -737,7 +766,7 @@ final class AppModel {
         case .localFailure(let message):
             localFailures[thread.id] = message
             if thread.id == selection { aiNote = message }
-        case .jev(let bucket): jevResults[thread.id] = .success(bucket)
+        case .jev(let result): jevResults[thread.id] = .success(result.bucket, noiseLikelihood: result.noiseLikelihood)
         case .jevFailure(let message): jevResults[thread.id] = .failure(message)
         }
     }

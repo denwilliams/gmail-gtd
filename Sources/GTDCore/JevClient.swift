@@ -23,7 +23,7 @@ public struct JevClient: Sendable {
         }
     }
 
-    public func categorise(_ thread: GmailThread, me: String?, prompt: String, token: String) async throws -> GTDBucket {
+    public func categorise(_ thread: GmailThread, me: String?, prompt: String, token: String) async throws -> JevClassification {
         let request = try Self.request(thread, me: me, prompt: prompt, token: token)
         let data: Data
         let response: HTTPURLResponse
@@ -33,13 +33,28 @@ public struct JevClient: Sendable {
             // Provider error bodies may echo prompts/mail: never expose them in errors or logs.
             throw CategorisationError.message("Jev HTTP \(response.statusCode). Check the token, quota and prompt in Settings, then retry.")
         }
-        struct Answer: Decodable { let type: String; let choice: GTDBucket }
+        struct Answer: Decodable {
+            let type: String
+            let choice: GTDBucket
+            let noiseLikelihood: Double?
+            enum CodingKeys: String, CodingKey { case type, choice, probabilities }
+
+            init(from decoder: any Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                type = try container.decode(String.self, forKey: .type)
+                choice = try container.decode(GTDBucket.self, forKey: .choice)
+                // Choice probabilities are documented by TypeSafe; confidence is a different statistic.
+                // Malformed/missing probabilities must not discard an otherwise usable category.
+                let probabilities = try? container.decode([String: Double].self, forKey: .probabilities)
+                noiseLikelihood = NoiseLikelihood.validated(probabilities?[GTDBucket.noise.rawValue])
+            }
+        }
         struct Response: Decodable { let answers: [String: Answer] }
         guard let decoded = try? JSONDecoder().decode(Response.self, from: data),
               let answer = decoded.answers["bucket"], answer.type == "choice" else {
             throw CategorisationError.message("Jev returned no usable GTD category. Retry; manual filing is still available.")
         }
-        return answer.choice
+        return JevClassification(bucket: answer.choice, noiseLikelihood: answer.noiseLikelihood)
     }
 
     static func request(_ thread: GmailThread, me: String?, prompt: String, token: String) throws -> URLRequest {

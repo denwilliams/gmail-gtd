@@ -53,7 +53,7 @@ private actor CorrectionMail: MailService {
         return TriageSuggestion(bucket: local, nextAction: "", summary: "Sample summary")
     }, remote: { _, _, _, _ in
         guard let jev else { throw CorrectionTestError.unavailable }
-        return jev
+        return JevClassification(bucket: jev)
     })
     let model = AppModel(signedIn: true, settings: settings, folder: .inbox,
                          categoriser: categoriser, loadJevToken: { "mock-token" })
