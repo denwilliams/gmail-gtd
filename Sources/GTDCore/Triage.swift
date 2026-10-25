@@ -100,7 +100,7 @@ public struct Triager: Sendable {
     // The on-device model has a small context window, so threads are trimmed hard.
     private static let maxChars = 6000
     /// Greedy decoding: the same thread always gets the same answer, so results are stable and the prompt can be tuned.
-    private static let deterministic = GenerationOptions(sampling: .greedy)
+    private static let deterministic = GenerationOptions(samplingMode: .greedy)
 
     public init() {}
 
