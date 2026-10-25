@@ -148,6 +148,19 @@ final class AppModel {
     /// Gmail calls for moves run one after another, in the order the user made them.
     private var moveChain: Task<Void, Never>?
     private var quietRefreshTask: Task<Void, Never>?
+    /// Covers the whole refresh, including cache invalidation and waiting for pending writes.
+    private var refreshing = false
+    @ObservationIgnored private var isAppActive = false
+    @ObservationIgnored private lazy var foregroundRefresh = ForegroundMailRefresh(refresh: { [weak self] in
+        guard let self, self.isAppActive, self.signedIn else { return }
+        await self.refreshQuietly(force: true)
+    })
+
+    func setAppActive(_ active: Bool) {
+        isAppActive = active
+        foregroundRefresh.setActive(active)
+        if !active { quietRefreshTask?.cancel() }
+    }
 
     // Paging: the next page of the open folder, loaded as the user nears the end of the list.
     private(set) var nextPageToken: String?
@@ -581,6 +594,8 @@ final class AppModel {
 
     /// Refresh, and retry the connection if it never came up (for example, the Gmail API was off).
     func refresh() async {
+        guard !refreshing, !loading, !loadingMore else { return }
+        refreshing = true; defer { refreshing = false }
         endDeNoiseMode()
         await cache?.invalidateAll()
         failed = []
@@ -637,7 +652,7 @@ final class AppModel {
 
     /// Appends the next page of the open folder.
     func loadMore() async {
-        guard let token = nextPageToken, !loadingMore, client != nil, folder != .today else { return }
+        guard let token = nextPageToken, !loading, !loadingMore, !refreshing, client != nil, folder != .today else { return }
         loadingMore = true; defer { loadingMore = false }
         let openFolder = folder
         do {
@@ -955,6 +970,7 @@ final class AppModel {
     /// After a pause with no moves or browsing, make sure the list really matches Gmail.
     private func scheduleQuietRefresh() {
         quietRefreshTask?.cancel()
+        guard isAppActive else { return }
         quietRefreshTask = Task { [weak self] in
             try? await Task.sleep(for: .seconds(15))
             guard !Task.isCancelled else { return }
@@ -962,21 +978,34 @@ final class AppModel {
         }
     }
 
-    func refreshQuietly() async {
+    func refreshQuietly(force: Bool = false) async {
+        guard !refreshing else { return }
+        refreshing = true; defer { refreshing = false }
         await moveChain?.value   // let our own changes reach Gmail first
-        // Keep the reviewed snapshot stable; explicit Refresh ends the mode and reloads normally.
-        guard folder != .corrections, deNoiseBatch == nil, client != nil, !loading, !loadingMore else { return }
+        guard !Task.isCancelled, !loading, !loadingMore, client != nil, folder != .corrections,
+              deNoiseBatch == nil, !force || (isAppActive && signedIn) else { return }
+        // Activation must see arrivals even inside the 20-second list TTL; keep reusable bodies.
+        if force { await cache?.invalidateLists() }
         if folder == .today { await loadToday(); return }
-        // If the user has scrolled through several pages, replacing them would jerk the list; leave it alone.
-        guard rows.count <= pageSize + 10 else { return }
+        // Idle reconciliation still leaves long lists alone. Foreground polling updates their first
+        // page and retains the already loaded tail instead of dropping the user's scroll/selection.
+        guard force || rows.count <= pageSize + 10 else { return }
         let openFolder = folder
         do {
             let page = try await fetchPage(labelID: labelID(for: openFolder), max: pageSize, hydrate: false, pageToken: nil)
-            // A review may have started while the list request was in flight.
-            guard folder == openFolder, deNoiseBatch == nil else { return }
-            let old = Dictionary(rows.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+            // A review or sign-out may have happened while the list request was in flight.
+            guard !Task.isCancelled, client != nil, folder == openFolder, deNoiseBatch == nil else { return }
+            let oldRows = rows
+            let old = Dictionary(oldRows.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
             // Keep rows we already have headers for, so nothing flashes back to a placeholder.
             rows = page.rows.map { new in old[new.id].flatMap { $0.loaded ? $0 : nil } ?? new }
+            if force, page.next != nil, oldRows.count >= pageSize {
+                let freshIDs = Set(page.rows.map(\.id))
+                let boundary = oldRows.lastIndex { freshIDs.contains($0.id) }
+                let tail = oldRows.dropFirst(boundary.map { $0 + 1 } ?? 0)
+                rows += tail.filter { !freshIDs.contains($0.id) }
+            }
+            // Resume from the fresh first-page token; loadMore deduplicates any retained tail.
             nextPageToken = page.next
             selectFirstIfNeeded()
             scheduleEnqueue()

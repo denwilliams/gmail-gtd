@@ -98,6 +98,20 @@ private actor DeNoiseRemote {
     return (model, mail)
 }
 
+@Test @MainActor func activationRefreshKeepsDeNoiseSnapshotStable() async throws {
+    let (model, mail) = try await deNoiseFixture()
+    defer { model.setAppActive(false); model.signOut() }
+    model.startDeNoiseMode()
+    let batch = try #require(model.deNoiseBatch)
+    await mail.pauseListing()
+    model.setAppActive(true)
+    try await Task.sleep(for: .milliseconds(50))
+    #expect(await mail.listingHeld == false)
+    #expect(model.deNoiseBatch?.id == batch.id)
+    #expect(model.deNoiseBatch?.rows.map(\.id) == batch.rows.map(\.id))
+    await mail.releaseListing()
+}
+
 @Test @MainActor func deNoiseEligibilityRequiresTenReadyLoadedInboxThreads() async throws {
     let (model, _) = try await deNoiseFixture()
     defer { model.signOut() }

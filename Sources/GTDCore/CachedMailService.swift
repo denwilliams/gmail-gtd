@@ -29,6 +29,9 @@ public actor CachedMailService: MailService {
         latestHistory = [:]
     }
 
+    /// Refresh list membership without discarding reusable thread bodies.
+    public func invalidateLists() { lists = [:] }
+
     public func listThreadPage(labelIDs: [String], query: String?, max: Int, pageToken: String?) async throws -> ThreadPage {
         let key = "\(labelIDs.sorted())|\(query ?? "")|\(max)|\(pageToken ?? "")"
         if let hit = lists[key], Date().timeIntervalSince(hit.at) < listTTL { return hit.page }
