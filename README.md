@@ -76,7 +76,7 @@ local prompt invalidates cached classifications; summary and project-planning pr
 To use Jev, enter a TypeSafe API token and explicitly enable the toggle. The token is stored in a
 separate Keychain item, never UserDefaults. Clear the token field and save to delete it. Disabling
 Jev stops new provider calls; an already-sent request cannot be recalled and its result is discarded.
-Sign-out clears in-memory results but retains provider settings/token, like the saved OAuth client
+Sign-out deletes this mailbox’s persisted Jev cache and clears in-memory results, but retains provider settings/token, like the saved OAuth client
 configuration. Turning Jev off restores local-only approval immediately.
 
 **Privacy/cost:** when enabled, on-screen threads in Inbox, Next Action and Waiting For are sent
@@ -104,6 +104,24 @@ conservative byte budget avoids assuming a tokenizer ratio; it is not a claim to
 window. Jev keeps newest email first and trims older content to the remaining budget. Over-limit/empty
 prompts are rejected with an error, never silently truncated. HTTP errors expose only status/actionable
 advice, not provider response bodies that might contain mail or credentials.
+
+### Local Jev cache
+
+Successful app classifications (category plus optional Noise probability) are cached privately in
+`~/Library/Application Support/GmailGTD/JevClassifications/<account-hash>.json` (up to 500 threads).
+They survive relaunch and same-account reconnection. Selection, scrolling and label/folder moves
+reuse the same result; concurrent requests share provider work. Account identity, full thread
+content, prompt, model, request criteria/budget and response-format version guard reuse. Tokens,
+message bodies, prompts, pending states and errors are not written to this cache. Unidentified
+mailboxes and demo sessions remain memory-only. A corrupt/incompatible cache is a cache miss;
+disk failures do not block in-session triage.
+
+**Regenerate/Retry** discards the selected thread’s completed entry and requests a fresh result.
+Changing only the local prompt or the Noise threshold does not invalidate a valid Jev result.
+Sign-out deletes the active mailbox's Jev cache and prevents late requests from restoring it.
+Deleting the account cache file while the app is closed also resets it safely. This cache is app-only;
+the CLI still evaluates each invocation directly. No new configuration or live-provider verification
+is required.
 
 ### Verification
 
@@ -139,7 +157,7 @@ its ten emails and explicitly press LGTM; stale actions cannot approve the repla
 shows its snapshotted Noise estimate. Not Noise corrections still shrink the snapshot without
 adding replacements. Threshold is session-only. Existing unscored local caches remain unscored
 until normal Regenerate supplies a score; there is no automatic cache refresh or cache redesign.
-Jev scores remain in memory with their categories; local scores follow the existing summary cache.
+Jev scores persist with their categories in the account-scoped cache described above; local scores follow the existing summary cache.
 
 ## Local Corrections
 
