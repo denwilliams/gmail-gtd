@@ -102,7 +102,10 @@ func jevCachePersistsCategoriesAndOptionalScoresPrivately(score: Double?) async 
     let probe = CacheProviderProbe()
     let key = try cacheKey()
     let requests = (0..<12).map { _ in Task { try await store.resolve(key) { await probe.run() } } }
-    try await Task.sleep(for: .milliseconds(100))
+    let deadline = ContinuousClock.now.advanced(by: .seconds(4))
+    while await probe.calls == 0 && ContinuousClock.now < deadline {
+        try await Task.sleep(for: .milliseconds(10))
+    }
     #expect(await probe.calls == 1)
     await probe.release()
     for request in requests {

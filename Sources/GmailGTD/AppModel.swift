@@ -100,9 +100,12 @@ final class AppModel {
     }
     private var categorisationGeneration = UUID()
     private var mailboxGeneration = UUID()
+    private var expectedHistory: [String: String] = [:]
     private var localFailures: [String: String] = [:]
     private var jevResults: [String: JevState] = [:]
     private var jevKeys: [String: JevClassificationKey] = [:]
+    /// A changed Gmail history needs content validation, not necessarily a fresh provider call.
+    private var jevUnverified: Set<String> = []
     private var jevStore = JevClassificationStore()
     private var jevMailbox = UUID().uuidString
     private var jevStoreMailbox: String?
@@ -110,7 +113,10 @@ final class AppModel {
     /// A model-wide planning failure stays stopped until explicit retry/refresh, not every scroll.
     private var planningUnavailable: String?
     var suggestion: TriageSuggestion? { selection.flatMap { localSuggestion(for: $0) } }
-    var jevState: JevState? { selection.flatMap { jevResults[$0] } }
+    var jevState: JevState? { selection.flatMap { validatedJevState(for: $0) } }
+    private func validatedJevState(for id: String) -> JevState? {
+        jevUnverified.contains(id) ? nil : jevResults[id]
+    }
     var approvalBucket: GTDBucket? {
         ApprovalPolicy.bucket(jevEnabled: categorisationSettings.jevEnabled, local: suggestion, jev: jevState)
     }
@@ -125,7 +131,7 @@ final class AppModel {
 
     /// Display-only fallback; approval still requires Jev success while Jev is enabled.
     func inboxBucket(for id: String) -> GTDBucket? {
-        if categorisationSettings.jevEnabled, case .success(let bucket, _)? = jevResults[id] {
+        if categorisationSettings.jevEnabled, case .success(let bucket, _)? = validatedJevState(for: id) {
             return bucket
         }
         return localSuggestion(for: id)?.bucket
@@ -149,6 +155,7 @@ final class AppModel {
         categorisationGeneration = UUID()
         jevResults = [:]
         jevKeys = [:]
+        jevUnverified = []
         jevPending = []
         localFailures = [:]
     }
@@ -265,7 +272,7 @@ final class AppModel {
 
     func noiseLikelihood(for id: String) -> Double? {
         ApprovalPolicy.noiseLikelihood(jevEnabled: categorisationSettings.jevEnabled,
-                                       local: localSuggestion(for: id), jev: jevResults[id])
+                                       local: localSuggestion(for: id), jev: validatedJevState(for: id))
     }
 
     private func qualifiesForDeNoise(_ id: String) -> Bool {
@@ -275,7 +282,7 @@ final class AppModel {
 
     private func readyApprovalBucket(for id: String) -> GTDBucket? {
         ApprovalPolicy.bucket(jevEnabled: categorisationSettings.jevEnabled,
-                              local: localSuggestion(for: id), jev: jevResults[id])
+                              local: localSuggestion(for: id), jev: validatedJevState(for: id))
     }
 
     var deNoiseEligibleRows: [ThreadRow] {
@@ -378,7 +385,7 @@ final class AppModel {
     }
 
     func signOut() {
-        mailboxGeneration = UUID()
+        mailboxGeneration = UUID(); expectedHistory = [:]
         if !demo { TokenStore.clear() }
         pending = []
         enqueueTask?.cancel()
@@ -408,7 +415,7 @@ final class AppModel {
     func connect(using base: any MailService, persist: Bool, cacheDirectory: URL? = nil) async {
         // Finish prior writes before reopening the same mailbox history into a new store instance.
         await moveChain?.value
-        mailboxGeneration = UUID()
+        mailboxGeneration = UUID(); expectedHistory = [:]
         invalidateCategorisation()
         let generation = categorisationGeneration
         pending = []; enqueueTask?.cancel()
@@ -498,13 +505,17 @@ final class AppModel {
 
     private func fetchPage(labelID: String, max: Int, hydrate: Bool, pageToken: String?) async throws -> (rows: [ThreadRow], next: String?) {
         guard let client else { return ([], nil) }
+        let generation = mailboxGeneration
         let page = try await client.listThreadPage(labelIDs: [labelID], query: nil, max: max, pageToken: pageToken)
+        guard generation == mailboxGeneration else { throw CancellationError() }
         let refs = page.refs
+        for ref in refs { if let history = ref.historyId { expectedHistory[ref.id] = history } }
         // A header cached against the same historyId needs no request at all.
         var result = refs.map { ref -> ThreadRow in
             if let h = store.header(for: ref.id, historyId: ref.historyId) {
                 return ThreadRow(id: ref.id, subject: h.subject, from: h.from, snippet: ref.snippet ?? "", date: h.date, unread: h.unread)
             }
+            jevUnverified.insert(ref.id)
             return ThreadRow(id: ref.id, subject: "", from: "", snippet: ref.snippet ?? "", date: nil, unread: false, loaded: false)
         }
         if hydrate {
@@ -525,7 +536,9 @@ final class AppModel {
                 for id in chunk { group.addTask { (id, try? await client.thread(id)) } }
                 for await (id, thread) in group {
                     guard generation == mailboxGeneration else { continue }
-                    if let thread { result[id] = thread; note(thread) } else { failed.insert(id) }
+                    if let thread {
+                        if note(thread) { result[id] = thread }
+                    } else { failed.insert(id) }
                 }
             }
         }
@@ -533,10 +546,13 @@ final class AppModel {
     }
 
     /// Remembers a fetched thread's list header and checks any cached summary against its messages.
-    private func note(_ thread: GmailThread) {
+    @discardableResult private func note(_ thread: GmailThread) -> Bool {
+        // An older fetch can finish after a newer list reports a reply. Do not validate/publish it.
+        if let expected = expectedHistory[thread.id], thread.historyId != expected { return false }
         let previous = store.entriesContentKey(for: thread.id)
         let key = jevKey(for: thread)
         let previousJevKey = jevKeys[thread.id]
+        jevUnverified.remove(thread.id)
         store.note(thread, header: Self.header(of: thread))
         if previous != SummaryStore.contentKeyForCategorisation(thread) ||
             (previousJevKey != nil && previousJevKey != key) {
@@ -551,6 +567,7 @@ final class AppModel {
         if categorisationSettings.jevEnabled, let key, let result = jevStore.classification(for: key) {
             jevResults[thread.id] = .success(result.bucket, noiseLikelihood: result.noiseLikelihood)
         }
+        return true
     }
 
     private func jevKey(for thread: GmailThread) -> JevClassificationKey? {
@@ -592,7 +609,7 @@ final class AppModel {
         do {
             let thread = try await client.thread(id, full: true)
             guard generation == mailboxGeneration, selection == id else { return }   // The user/session has moved on.
-            note(thread)
+            guard note(thread) else { scheduleEnqueue(); return }
             store.touch(id)
             detail = thread
             apply(thread, id: id)
@@ -676,7 +693,8 @@ final class AppModel {
     }
 
     private func needsJev(_ id: String) -> Bool {
-        folder != .bucket(.project) && categorisationSettings.jevEnabled && jevResults[id]?.isFinished != true
+        folder != .bucket(.project) && categorisationSettings.jevEnabled &&
+            (jevUnverified.contains(id) || jevResults[id]?.isFinished != true)
     }
 
     /// Rows currently on screen, reported by the list as they scroll in and out.
@@ -778,7 +796,7 @@ final class AppModel {
         do {
             let thread = try await client.thread(id, full: true)
             guard generation == categorisationGeneration, signedIn else { return }
-            note(thread)
+            guard note(thread) else { return }
             if projects {
                 let plan = try await makePlan(thread)
                 guard generation == categorisationGeneration, signedIn else { return }
@@ -843,10 +861,10 @@ final class AppModel {
             localFailures[thread.id] = message
             if thread.id == selection { aiNote = message }
         case .jev(let result):
-            guard jevKeys[thread.id] == remoteKey else { return }
+            guard !jevUnverified.contains(thread.id), jevKeys[thread.id] == remoteKey else { return }
             jevResults[thread.id] = .success(result.bucket, noiseLikelihood: result.noiseLikelihood)
         case .jevFailure(let message):
-            guard jevKeys[thread.id] == remoteKey else { return }
+            guard !jevUnverified.contains(thread.id), jevKeys[thread.id] == remoteKey else { return }
             jevResults[thread.id] = .failure(message)
         }
     }
@@ -926,7 +944,7 @@ final class AppModel {
         let correction = manualChoice ? target.flatMap {
             CorrectionRecord.capture(id: moveID, threadID: id, subject: subject, from: from,
                                      chosenBucket: $0, jevEnabled: categorisationSettings.jevEnabled,
-                                     localBucket: localSuggestion(for: id)?.bucket, jevBucket: jevResults[id]?.bucket,
+                                     localBucket: localSuggestion(for: id)?.bucket, jevBucket: validatedJevState(for: id)?.bucket,
                                      localPrompt: categorisationSettings.localPrompt, jevPrompt: categorisationSettings.jevPrompt)
         } : nil
         let removed = removeLocally(id)

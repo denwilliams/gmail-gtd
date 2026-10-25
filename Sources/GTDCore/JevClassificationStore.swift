@@ -52,9 +52,11 @@ public final class JevClassificationStore {
         var version = 1
         let entries: [String: Entry]
     }
-    private struct Pending {
+    private final class Pending {
         let id = UUID()
         let task: Task<JevClassification, Error>
+        var isValid = true
+        init(task: Task<JevClassification, Error>) { self.task = task }
     }
     private var entries: [String: Entry] = [:]
     private var inFlight: [JevClassificationKey: Pending] = [:]
@@ -92,8 +94,8 @@ public final class JevClassificationStore {
         if let cached = classification(for: key) { return cached }
         if let running = inFlight[key] {
             let result = try await running.task.value
-            // The owner may already have saved and removed the task. A cleared store has neither.
-            guard inFlight[key]?.id == running.id || classification(for: key) != nil else { throw CancellationError() }
+            // Eviction after completion must not invalidate joined work; explicit cancellation does.
+            guard running.isValid else { throw CancellationError() }
             return result
         }
         let pending = Pending(task: Task { try await operation() })
@@ -101,7 +103,7 @@ public final class JevClassificationStore {
         defer { if inFlight[key]?.id == pending.id { inFlight[key] = nil } }
         let result = try await pending.task.value
         // Sign-out/removal may happen during a provider call that ignores task cancellation.
-        guard inFlight[key]?.id == pending.id else { throw CancellationError() }
+        guard pending.isValid else { throw CancellationError() }
         entries[key.threadID] = Entry(key: key, bucket: result.bucket,
                                       noiseLikelihood: result.noiseLikelihood, lastUsed: Date())
         trim()
@@ -113,13 +115,15 @@ public final class JevClassificationStore {
     public func remove(for threadID: String) {
         entries[threadID] = nil
         for key in Array(inFlight.keys) where key.threadID == threadID {
-            inFlight.removeValue(forKey: key)?.task.cancel()
+            if let pending = inFlight.removeValue(forKey: key) {
+                pending.isValid = false; pending.task.cancel()
+            }
         }
         save()
     }
 
     public func cancelPending() {
-        for pending in inFlight.values { pending.task.cancel() }
+        for pending in inFlight.values { pending.isValid = false; pending.task.cancel() }
         inFlight = [:]
     }
 

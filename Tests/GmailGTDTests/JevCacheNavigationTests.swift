@@ -19,6 +19,7 @@ private actor NavigationMailbox: MailService {
         self.account = account; self.heldReads = heldReads
     }
     func releaseReads() { heldReads = false }
+    func holdReads() { heldReads = true }
     func addReply() { reply = true; revision += 1 }
     func listThreadPage(labelIDs: [String], query: String?, max: Int, pageToken: String?) async throws -> ThreadPage {
         let page = try await base.listThreadPage(labelIDs: labelIDs, query: query, max: 100, pageToken: nil)
@@ -237,4 +238,27 @@ private actor NavigationProvider {
     #expect(model.detail?.messages?.count == 2)
     #expect(model.approvalBucket == .nextAction)
     #expect(await provider.calls == 1)
+}
+
+@Test @MainActor func changedHistoryWithholdsApprovalUntilContentIsValidatedWithoutReclassifyingLabels() async throws {
+    let provider = NavigationProvider()
+    let mailbox = NavigationMailbox()
+    let model = cacheNavigationModel(provider)
+    defer { model.signOut() }
+    await model.connect(using: mailbox, persist: false)
+    try await waitForCacheNavigation { model.approvalBucket == .noise && !model.suggesting }
+    await mailbox.holdReads()
+    try await mailbox.modifyThread(NavigationMailbox.id, add: ["STARRED"], remove: [])
+    model.rowAppeared(NavigationMailbox.id)
+    await model.refresh()
+    #expect(model.approvalBucket == nil) // Labels/history changed; content not validated yet.
+    await mailbox.releaseReads()
+    try await waitForCacheNavigation { model.approvalBucket == .noise && !model.suggesting }
+    #expect(await provider.calls == 1) // Validation is not another provider call.
+    await mailbox.holdReads()
+    await mailbox.addReply()
+    await model.refresh()
+    #expect(model.approvalBucket == nil) // Never approve the old category while a reply is fetching.
+    await mailbox.releaseReads()
+    try await waitForCacheNavigation { await provider.calls == 2 && model.approvalBucket == .noise && !model.suggesting }
 }
