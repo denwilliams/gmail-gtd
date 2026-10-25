@@ -33,6 +33,7 @@ private actor PlanProbe {
     let probe = PlanProbe()
     let model = AppModel(signedIn: true, settings: CategorisationSettings(), folder: .bucket(.project),
                          makePlan: { try await probe.unavailable($0) }, loadJevToken: { nil })
+    model.demo = true   // Cleanup must never touch real-account credentials.
     await model.connect(using: DemoMailService(), persist: false)
     try await eventually { model.aiNote != nil && !model.planning }
     let id = try #require(model.selection)
@@ -78,6 +79,7 @@ private actor PlanProbe {
         }, remote: { _, _, _, _ in .project })
         let model = AppModel(signedIn: true, settings: settings, folder: .bucket(bucket),
                              categoriser: categoriser, loadJevToken: { nil })
+        model.demo = true   // Cleanup must never touch real-account credentials.
         await model.connect(using: DemoMailService(), persist: false)
         try await eventually { model.aiNote != nil && model.approvalBucket != nil && !model.suggesting }
         #expect(model.suggestion == nil)
@@ -108,6 +110,7 @@ private actor PlanProbe {
         }, remote: { _, _, _, _ in throw ProbeError.tooManyAttempts })
         let model = AppModel(signedIn: true, settings: settings, folder: .bucket(bucket),
                              categoriser: categoriser, loadJevToken: { nil })
+        model.demo = true   // Cleanup must never touch real-account credentials.
         await model.connect(using: DemoMailService(), persist: false)
         try await eventually { model.jevStatus?.failed == true && !model.suggesting }
         #expect(model.suggestion == nil)
