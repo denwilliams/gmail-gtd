@@ -509,7 +509,11 @@ final class AppModel {
         let page = try await client.listThreadPage(labelIDs: [labelID], query: nil, max: max, pageToken: pageToken)
         guard generation == mailboxGeneration else { throw CancellationError() }
         let refs = page.refs
-        for ref in refs { if let history = ref.historyId { expectedHistory[ref.id] = history } }
+        for ref in refs {
+            guard let history = ref.historyId else { continue }
+            if let known = expectedHistory[ref.id], history.compare(known, options: .numeric) == .orderedAscending { continue }
+            expectedHistory[ref.id] = history
+        }
         // A header cached against the same historyId needs no request at all.
         var result = refs.map { ref -> ThreadRow in
             if let h = store.header(for: ref.id, historyId: ref.historyId) {
@@ -548,7 +552,12 @@ final class AppModel {
     /// Remembers a fetched thread's list header and checks any cached summary against its messages.
     @discardableResult private func note(_ thread: GmailThread) -> Bool {
         // An older fetch can finish after a newer list reports a reply. Do not validate/publish it.
-        if let expected = expectedHistory[thread.id], thread.historyId != expected { return false }
+        if let expected = expectedHistory[thread.id] {
+            guard let actual = thread.historyId, actual.compare(expected, options: .numeric) != .orderedAscending else { return false }
+        }
+        // Gmail history IDs are monotonic decimal strings. A full fetch may be NEWER than the list
+        // (for example a move/reply between requests); accept it rather than repeatedly refetching it.
+        if let history = thread.historyId { expectedHistory[thread.id] = history }
         let previous = store.entriesContentKey(for: thread.id)
         let key = jevKey(for: thread)
         let previousJevKey = jevKeys[thread.id]

@@ -12,6 +12,8 @@ private actor NavigationMailbox: MailService {
     private let account: String
     private var reply = false
     private var revision = 1
+    private var listedRevision: Int?
+    func freezeListingRevision() { listedRevision = revision }
     private var heldReads: Bool
     private(set) var readsStarted = 0
     private(set) var readsFinished = 0
@@ -24,23 +26,24 @@ private actor NavigationMailbox: MailService {
     func listThreadPage(labelIDs: [String], query: String?, max: Int, pageToken: String?) async throws -> ThreadPage {
         let page = try await base.listThreadPage(labelIDs: labelIDs, query: query, max: 100, pageToken: nil)
         return ThreadPage(refs: page.refs.filter { $0.id == Self.id }.map {
-            ThreadRef(id: $0.id, snippet: $0.snippet, historyId: String(revision))
+            ThreadRef(id: $0.id, snippet: $0.snippet, historyId: String(listedRevision ?? revision))
         }, nextPageToken: nil)
     }
     func thread(_ id: String, full: Bool) async throws -> GmailThread {
         readsStarted += 1
         let thread = try await base.thread(id, full: full)
-        let deadline = ContinuousClock.now.advanced(by: .seconds(6))
-        while heldReads && ContinuousClock.now < deadline {
-            try? await Task.sleep(for: .milliseconds(10))
-        }
-        readsFinished += 1
         var messages = thread.messages ?? []
         if reply {
             messages.append(GmailMessage(id: "new-reply", threadId: id, labelIds: messages.last?.labelIds,
                                          snippet: "An additional request.", internalDate: nil, payload: nil))
         }
-        return GmailThread(id: id, historyId: String(revision), messages: messages)
+        let snapshot = GmailThread(id: id, historyId: String(revision), messages: messages)
+        let deadline = ContinuousClock.now.advanced(by: .seconds(6))
+        while heldReads && ContinuousClock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        readsFinished += 1
+        return snapshot
     }
     func labels() async throws -> [GmailLabel] { try await base.labels() }
     func createLabel(_ name: String) async throws -> GmailLabel { try await base.createLabel(name) }
@@ -261,4 +264,53 @@ private actor NavigationProvider {
     #expect(model.approvalBucket == nil) // Never approve the old category while a reply is fetching.
     await mailbox.releaseReads()
     try await waitForCacheNavigation { await provider.calls == 2 && model.approvalBucket == .noise && !model.suggesting }
+}
+
+@Test @MainActor func newerThreadSnapshotThanListedHistoryIsAcceptedWithoutRefetchLoop() async throws {
+    let provider = NavigationProvider()
+    let mailbox = NavigationMailbox()
+    await mailbox.freezeListingRevision()
+    await mailbox.addReply() // Full fetch is newer than the list, a normal Gmail race.
+    let model = cacheNavigationModel(provider)
+    defer { model.signOut() }
+    await model.connect(using: mailbox, persist: false)
+    try await waitForCacheNavigation { model.approvalBucket == .noise && !model.suggesting }
+    #expect(await provider.calls == 1)
+    #expect(await mailbox.readsStarted == 1)
+    #expect(model.detail?.messages?.count == 2)
+}
+
+@Test @MainActor func olderInflightThreadSnapshotCannotValidateANewlyListedReply() async throws {
+    let provider = NavigationProvider()
+    let mailbox = NavigationMailbox()
+    let model = cacheNavigationModel(provider)
+    defer { model.signOut() }
+    await model.connect(using: mailbox, persist: false)
+    try await waitForCacheNavigation { model.approvalBucket == .noise && !model.suggesting }
+    await mailbox.holdReads()
+    model.selection = nil
+    await model.refresh() // Force an old snapshot into the shared Gmail fetch lane.
+    try await waitForCacheNavigation { await mailbox.readsStarted == 2 }
+    await mailbox.addReply()
+    model.rowAppeared(NavigationMailbox.id)
+    await model.refresh() // New history is now known while the old snapshot is still in flight.
+    #expect(model.approvalBucket == nil)
+    await mailbox.releaseReads()
+    try await waitForCacheNavigation { await provider.calls == 2 && model.approvalBucket == .noise && !model.suggesting }
+    #expect(model.store.entriesContentKey(for: NavigationMailbox.id) == "2:new-reply")
+    #expect(await mailbox.readsStarted == 3)
+}
+
+@Test @MainActor func unidentifiedMailboxNeverPersistsOrReusesJevAcrossReconnect() async throws {
+    let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let provider = NavigationProvider()
+    let mailbox = NavigationMailbox(account: " ")
+    let model = cacheNavigationModel(provider)
+    defer { model.signOut() }
+    await model.connect(using: mailbox, persist: true, cacheDirectory: directory)
+    try await waitForCacheNavigation { model.approvalBucket == .nextAction && !model.suggesting }
+    await model.connect(using: mailbox, persist: true, cacheDirectory: directory)
+    try await waitForCacheNavigation { await provider.calls == 2 && model.approvalBucket == .nextAction && !model.suggesting }
+    #expect(!FileManager.default.fileExists(atPath: directory.appending(path: "JevClassifications").path))
 }

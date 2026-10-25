@@ -97,8 +97,8 @@ func jevCachePersistsCategoriesAndOptionalScoresPrivately(score: Double?) async 
     #expect(relaunched.classification(for: key) == nil)
 }
 
-@Test @MainActor func concurrentJevRequestsJoinOneProviderOperation() async throws {
-    let store = JevClassificationStore()
+@Test(arguments: [0, 500]) @MainActor func concurrentJevRequestsJoinOneProviderOperation(capacity: Int) async throws {
+    let store = JevClassificationStore(capacity: capacity)
     let probe = CacheProviderProbe()
     let key = try cacheKey()
     let requests = (0..<12).map { _ in Task { try await store.resolve(key) { await probe.run() } } }
