@@ -20,11 +20,18 @@ public actor LabelManager {
         return ids
     }
 
-    /// Files a thread into a bucket: archives it from the inbox and clears any other GTD label.
+    /// Files a thread into a bucket, clearing other GTD labels. Next Action, Waiting For and Someday
+    /// belong in the inbox (even if previously archived); the remaining buckets are archived, never deleted.
     public func file(thread id: String, into bucket: GTDBucket) async throws {
         let all = try await ensureLabels()
         let others = all.filter { $0.key != bucket }.map(\.value)
-        try await client.modifyThread(id, add: [all[bucket]!], remove: ["INBOX"] + others)
+        let keepInInbox = switch bucket {
+        case .nextAction, .waitingFor, .someday: true
+        case .reference, .noise, .project, .done: false
+        }
+        try await client.modifyThread(id,
+                                      add: [all[bucket]!] + (keepInInbox ? ["INBOX"] : []),
+                                      remove: others + (keepInInbox ? [] : ["INBOX"]))
     }
 
     /// Returns a thread to the inbox, clearing its GTD labels.

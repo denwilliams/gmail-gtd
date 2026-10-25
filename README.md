@@ -9,8 +9,10 @@ Optional Jev categorisation sends email text to TypeSafe only after explicit opt
 - `GTDCore`: auth, Gmail REST client, label manager, triage
 
 GTD buckets are Gmail labels: `GTD/Next Action`, `GTD/Waiting For`, `GTD/Someday`,
-`GTD/Reference`, `GTD/Project`, `GTD/Noise` (bulk mail you probably never need; a denoise and trash step is planned), `GTD/Done`. Every thread ends in one of these, so nothing disappears into an unlabelled archive. Filing a thread archives it from the inbox and swaps the
-label, so it works in the Gmail web UI too.
+`GTD/Reference`, `GTD/Project`, `GTD/Noise` (bulk mail you probably never need; a denoise and trash step is planned), `GTD/Done`. Every thread ends in one of these, so nothing disappears into an unlabelled archive. Filing swaps the GTD label and keeps Next Action, Waiting For and Someday in the Gmail Inbox,
+returning previously archived threads to the Inbox too. Reference and Noise are archived (not deleted)
+and remain searchable under their GTD labels. Project and Done keep their existing archive behaviour.
+These rules apply when filing a thread; existing mail is not bulk-migrated.
 
 ## Demo mode
 

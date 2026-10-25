@@ -41,7 +41,8 @@ struct UndoMove: Identifiable {
     let id = UUID()
     let threadID: String
     let subject: String
-    let before: Set<String>
+    /// Resolves after earlier moves finish, before this move changes any labels. Undo can be clicked meanwhile.
+    let before: Task<Set<String>, Error>
     let summary: String
     /// The bucket it moved to, or nil for the inbox. Drives the toast's colour.
     let destination: GTDBucket?
@@ -640,8 +641,13 @@ final class AppModel {
     private enum Destination { case bucket(GTDBucket), inbox }
 
     private func move(_ id: String, to destination: Destination, summary: String) {
-        guard let labels else { return }
-        let before = labelsAssumedBefore(id)
+        guard let labels, let client else { return }
+        let previous = moveChain
+        let before = Task {
+            await previous?.value
+            let thread = try await client.thread(id, full: false)
+            return try await labels.managedLabels(in: thread.messages?.flatMap { $0.labelIds ?? [] } ?? [])
+        }
         let subject = [detail?.id == id ? detail?.messages?.last?.subject : nil,
                        rows.first { $0.id == id }?.subject,
                        nextActions.first { $0.id == id }?.subject,
@@ -654,6 +660,7 @@ final class AppModel {
         remember(move)
         enqueueRemote { [weak self] in
             do {
+                _ = try await before.value   // Never move mail without an undo snapshot.
                 switch destination {
                 case .bucket(let bucket): try await labels.file(thread: id, into: bucket)
                 case .inbox: try await labels.unfile(thread: id)
@@ -666,22 +673,6 @@ final class AppModel {
     private func enqueueRemote(_ work: @escaping @MainActor () async -> Void) {
         let previous = moveChain
         moveChain = Task { await previous?.value; await work() }
-    }
-
-    /// The thread's inbox and GTD labels as far as we know without asking Gmail: from the open thread if it is
-    /// that one, otherwise from where the thread was listed.
-    private func labelsAssumedBefore(_ id: String) -> Set<String> {
-        let managed = Set(labelIDs.values).union(["INBOX"])
-        if let detail, detail.id == id {
-            return Set(detail.messages?.flatMap { $0.labelIds ?? [] } ?? []).intersection(managed)
-        }
-        if nextActions.contains(where: { $0.id == id }), let label = labelIDs[.nextAction] { return [label] }
-        if waiting.contains(where: { $0.id == id }), let label = labelIDs[.waitingFor] { return [label] }
-        switch folder {
-        case .inbox: return ["INBOX"]
-        case .bucket(let b): return labelIDs[b].map { [$0] } ?? []
-        case .today: return []
-        }
     }
 
     /// Takes a thread off the screen now, and selects the next one.
@@ -749,7 +740,10 @@ final class AppModel {
         let backOnScreen = folder == .today ? move.todayList != nil : folder == move.origin
         if !backOnScreen { notice = "Put \u{201C}\(move.subject)\u{201D} back where it was" }
         enqueueRemote { [weak self] in
-            do { try await labels.restore(thread: move.threadID, to: move.before) } catch {
+            do {
+                let before = try await move.before.value
+                try await labels.restore(thread: move.threadID, to: before)
+            } catch {
                 self?.error = "Couldn\u{2019}t undo the move of \u{201C}\(move.subject)\u{201D}: \(error.localizedDescription)"
                 await self?.refreshQuietly()
             }
