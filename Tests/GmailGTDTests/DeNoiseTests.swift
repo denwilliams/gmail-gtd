@@ -279,8 +279,11 @@ func deNoiseContextChangesInvalidateStaleActions(change: String) async throws {
 
 @Test @MainActor func deNoiseInFlightQuietRefreshCannotReplaceReviewedInbox() async throws {
     let (model, mail) = try await deNoiseFixture()
-    defer { model.signOut() }
-    model.rows = Array(model.rows.prefix(16))   // Within the quiet-refresh paging threshold.
+    defer { model.demo = true; model.signOut() }
+    // The fixture cached 8-row demo pages. Use the real 50-row page size to force an uncached
+    // request without sleeping through the cache TTL; the backend remains in-memory demo mail.
+    model.demo = false
+    model.rows = Array(model.rows.prefix(16))
     let before = model.rows
     await mail.pauseListing()
     let refresh = Task { await model.refreshQuietly() }
