@@ -54,6 +54,9 @@ struct MailView: View {
                 Section("Process") {
                     sidebarRow("Inbox", Folder.inbox.symbol, .accentColor, hint: "\u{2318}0").tag(Folder.inbox)
                 }
+                Section("Local") {
+                    sidebarRow("Corrections", Folder.corrections.symbol, .orange, hint: "").tag(Folder.corrections)
+                }
                 Section("GTD") {
                     ForEach(GTDBucket.allCases, id: \.self) { b in
                         sidebarRow(b.title, Folder.bucket(b).symbol, b.color, hint: "\u{2318}\(b.shortcut)").tag(Folder.bucket(b))
@@ -68,13 +71,14 @@ struct MailView: View {
             } else {
                 switch model.folder {
                 case .today: TodayView()
+                case .corrections: CorrectionsView()
                 case .bucket(.project): HStack(spacing: 0) { ProjectListView(focus: $listFocused); Divider(); ProjectDetailView() }
                 default: HStack(spacing: 0) { ThreadListView(focus: $listFocused); Divider(); ThreadDetailView() }
                 }
             }
         }
         .navigationTitle(model.folder.title)
-        .navigationSubtitle(model.folder == .today ? "" : model.listSubtitle)
+        .navigationSubtitle(model.folder == .today ? "" : model.folder == .corrections ? "\(model.corrections.records.count) local corrections" : model.listSubtitle)
         .background(ApprovalShortcutHandler(model: model))
         .defaultFocus($listFocused, true)
         .onAppear { listFocused = true }
@@ -98,7 +102,7 @@ struct MailView: View {
         .animation(.easeOut(duration: 0.18), value: model.undoToast?.id)
         .safeAreaInset(edge: .bottom, spacing: 0) {
             VStack(spacing: 0) {
-                if model.folder != .today && model.deNoiseBatch == nil { KeyHintBar() }
+                if model.folder != .today && model.folder != .corrections && model.deNoiseBatch == nil { KeyHintBar() }
                 StatusBar()
             }
         }

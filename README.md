@@ -113,6 +113,25 @@ The PR test workflow runs both on a macOS 26 runner. Jev tests inject mocked HTT
 need a token or send real email. A live smoke test is optional: opt in with your own token and sample
 mail, verify both categories, press Approve, then disable Jev and verify local-only approval.
 
+## Local Corrections
+
+The **Corrections** sidebar keeps timestamped snapshots when a manual bucket choice differs from
+its active approval suggestion: Jev when enabled and successful, otherwise AFM when Jev is disabled.
+No active result means no inferred correction. Both available categories, the chosen bucket, and the
+relevant prompts at the time are retained; subsequent classifications do not rewrite history.
+This includes De-noise “Not Noise” choices, but not approvals, automatic filing or moves to Inbox.
+Records are added only after Gmail confirms filing; successful undo removes the corresponding event.
+
+Each entry offers a **possible explanation**, generated deterministically on this Mac from captured
+prompt wording, not model reasoning or a verified cause. Missing results/prompts are marked unavailable.
+Reviewing history makes no provider or Gmail requests (except explicitly opening a thread in Gmail).
+No correction-specific Gmail labels are created. History contains thread ID, subject/sender, categories,
+prompts and timestamp, not message bodies or credentials. It lives in private mailbox-keyed JSON files in
+`~/Library/Application Support/GmailGTD/Corrections/`. Sign-out hides but retains
+history for the same mailbox; demo history stays in memory and resets. If mailbox identity or disk access
+is unavailable, filing still works and history is session-only with a warning. Unreadable history is
+never overwritten. To remove retained history, quit the app and delete that local Corrections directory.
+
 ## Notes
 
 - Moves are instant: the thread leaves the list and a small toast (not a system notification) confirms it, while
