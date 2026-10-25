@@ -62,6 +62,8 @@ private actor PlanProbe {
     #expect(model.pending.isEmpty)
     #expect(!model.planning)
 
+    // Successful recovery normally plans every visible project; isolate this attempt to the selection.
+    for row in model.rows { model.rowDisappeared(row.id) }
     await probe.enable()
     let retryID = try #require(model.selection)
     model.regenerateSelected()
