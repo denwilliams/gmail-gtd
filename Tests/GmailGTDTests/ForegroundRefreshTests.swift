@@ -149,10 +149,13 @@ private actor RefreshMail: MailService {
     func emailAddress() async throws -> String { try await base.emailAddress() }
 }
 
-@MainActor private func refreshFixture(_ mail: RefreshMail) async -> AppModel {
+@MainActor private func refreshFixture(
+    _ mail: RefreshMail,
+    quietRefreshSleep: @escaping @MainActor (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
+) async -> AppModel {
     let model = AppModel(signedIn: true, settings: CategorisationSettings(), folder: .inbox,
                          categoriser: Categoriser(local: { _, _, _ in throw RefreshTestError.unavailable }),
-                         loadJevToken: { nil })
+                         loadJevToken: { nil }, quietRefreshSleep: quietRefreshSleep)
     model.demo = true
     await model.connect(using: mail, persist: false)
     return model
@@ -327,6 +330,50 @@ private actor RefreshMail: MailService {
     #expect(await mail.maxInflight == 1)
     try await Task.sleep(for: .milliseconds(60))
     #expect(await mail.calls == 2)
+}
+
+@Test(arguments: [false, true]) @MainActor
+func reactivationWaitsForCancelledIdleRefreshIncludingReplacedOwners(reschedule: Bool) async throws {
+    let clock = RefreshClock()
+    let mail = RefreshMail()
+    await mail.useIDs(["in01", "in02", "in03"])
+    let model = await refreshFixture(mail, quietRefreshSleep: { try await clock.sleep($0) })
+    defer { model.setAppActive(false); model.signOut() }
+    model.setAppActive(true)
+    try await refreshEventually { await mail.calls == 2 && model.detail != nil && !model.suggesting }
+    await mail.holdMoves()
+    await model.fileSelected(into: .reference)
+    try await refreshEventually { await mail.moves == 1 && clock.waiting == 1 }
+    #expect(clock.intervals.last == .seconds(15))
+    clock.advance(.seconds(15))
+    // Let the actual idle task acquire the shared lock and suspend on the held remote move.
+    try await Task.sleep(for: .milliseconds(30))
+    #expect(clock.waiting == 0)
+    #expect(await mail.calls == 2)
+    if reschedule {
+        // Browsing replaces the idle-task handle while the cancelled old owner is still waiting.
+        model.selection = "in03"
+        try await refreshEventually { model.detail?.id == "in03" && !model.suggesting }
+    }
+    model.setAppActive(false)
+    await mail.arrive("in04")
+    model.setAppActive(true)
+    model.setAppActive(false)
+    model.setAppActive(true)
+    model.setAppActive(true)
+    try await Task.sleep(for: .milliseconds(30))
+    #expect(await mail.calls == 2)
+    await mail.releaseMoves()
+    // Activation must fetch immediately after the cancelled idle owner exits, not ten minutes later.
+    try await refreshEventually { model.rows.first?.id == "in04" }
+    #expect(await mail.calls == 3)
+    #expect(await mail.maxInflight == 1)
+    try await Task.sleep(for: .milliseconds(60))
+    #expect(await mail.calls == 3)
+    model.setAppActive(false)
+    try await refreshEventually { clock.waiting == 0 }
+    clock.advance(.seconds(1800))
+    #expect(await mail.calls == 3)
 }
 
 @Test @MainActor func activationRevalidatesChangedRowsDetailAndCategorisationButReusesUnchangedThreads() async throws {

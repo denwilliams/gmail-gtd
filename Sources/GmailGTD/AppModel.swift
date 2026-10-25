@@ -148,11 +148,16 @@ final class AppModel {
     /// Gmail calls for moves run one after another, in the order the user made them.
     private var moveChain: Task<Void, Never>?
     private var quietRefreshTask: Task<Void, Never>?
+    private let quietRefreshSleep: @MainActor (Duration) async throws -> Void
     /// Covers the whole refresh, including cache invalidation and waiting for pending writes.
     private var refreshing = false
     @ObservationIgnored private var isAppActive = false
     @ObservationIgnored private lazy var foregroundRefresh = ForegroundMailRefresh(refresh: { [weak self] in
-        guard let self, self.isAppActive, self.signedIn else { return }
+        guard let self else { return }
+        // Idle reconciliation can also own the refresh lock while awaiting a remote write.
+        // Its task chain retains cancelled predecessors, even after browsing reschedules it.
+        if let idle = self.quietRefreshTask, idle.isCancelled { await idle.value }
+        guard !Task.isCancelled, self.isAppActive, self.signedIn else { return }
         await self.refreshQuietly(force: true)
     })
 
@@ -203,13 +208,15 @@ final class AppModel {
          settings: CategorisationSettings = .load(), folder: Folder = .today,
          makePlan: @escaping @Sendable (GmailThread) async throws -> ProjectPlan = { try await Triager().plan(for: $0) },
          categoriser: Categoriser = Categoriser(),
-         loadJevToken: @escaping @Sendable () -> String? = { JevTokenStore.load() }) {
+         loadJevToken: @escaping @Sendable () -> String? = { JevTokenStore.load() },
+         quietRefreshSleep: @escaping @MainActor (Duration) async throws -> Void = { try await Task.sleep(for: $0) }) {
         self.signedIn = signedIn
         self.categorisationSettings = settings
         self.folder = folder
         self.makePlan = makePlan
         self.categoriser = categoriser
         self.loadJevToken = loadJevToken
+        self.quietRefreshSleep = quietRefreshSleep
     }
     // On-device AI queue: threads waiting for a suggestion or plan, top of the list first.
     private(set) var pending: [String] = []
@@ -971,10 +978,15 @@ final class AppModel {
 
     /// After a pause with no moves or browsing, make sure the list really matches Gmail.
     private func scheduleQuietRefresh() {
-        quietRefreshTask?.cancel()
+        let previous = quietRefreshTask
+        previous?.cancel()
         guard isAppActive else { return }
+        let sleep = quietRefreshSleep
         quietRefreshTask = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(15))
+            // Do not lose a cancelled owner when a new move or selection replaces the timer.
+            await previous?.value
+            guard !Task.isCancelled else { return }
+            try? await sleep(.seconds(15))
             guard !Task.isCancelled else { return }
             await self?.refreshQuietly()
         }
