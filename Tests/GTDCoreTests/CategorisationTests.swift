@@ -80,7 +80,7 @@ private func email(_ body: String = "Please review the document.") throws -> Gma
     #expect(!(body["state"] as? String ?? "").contains("�"))
 }
 
-@Test(arguments: ["", " \n", "bad\r\ntoken"])
+@Test(arguments: ["", " \n", "bad\r\ntoken", "bad token", "é"])
 func missingAndInvalidTokensFailBeforeHTTP(_ token: String) async throws {
     let client = JevClient { _ in Issue.record("No request should be sent"); throw URLError(.badURL) }
     await #expect(throws: (any Error).self) {

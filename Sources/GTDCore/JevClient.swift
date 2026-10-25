@@ -44,8 +44,11 @@ public struct JevClient: Sendable {
 
     static func request(_ thread: GmailThread, me: String?, prompt: String, token: String) throws -> URLRequest {
         let token = token.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !token.isEmpty, !token.contains("\n"), !token.contains("\r") else {
+        guard !token.isEmpty, token.utf8.allSatisfy({ (33...126).contains($0) }) else {
             throw CategorisationError.message("Add a valid Jev API token in Settings, or disable Jev to use local-only triage.")
+        }
+        guard !(thread.messages ?? []).isEmpty else {
+            throw CategorisationError.message("Jev needs a non-empty email thread. Refresh and retry.")
         }
         try TriagePrompts.validate(prompt, maxBytes: TriagePrompts.jevMaxBytes, source: "Jev")
         struct Question: Encodable { let type = "choice"; let instructions: String; let criteria: [String: String] }

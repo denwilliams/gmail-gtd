@@ -470,9 +470,9 @@ final class AppModel {
     /// Queues the on-screen threads that have no result yet, top to bottom, with the open thread first.
     /// Anything that scrolled out of view before its turn is dropped from the queue.
     private func enqueueVisible() {
-        guard aiFolder else { return }
+        guard aiFolder, signedIn else { return }
         var ids = rows.map(\.id).filter { visible.contains($0) && !isDone($0) && !inflight.contains($0) && !failed.contains($0) }
-        if let selection, !isDone(selection), !inflight.contains(selection) {
+        if let selection, !isDone(selection), !inflight.contains(selection), !failed.contains(selection) {
             ids.removeAll { $0 == selection }
             ids.insert(selection, at: 0)
         }
@@ -554,7 +554,7 @@ final class AppModel {
 
     /// Re-runs the model for the open thread, ignoring any cached result.
     func regenerateSelected() {
-        guard let id = selection else { return }
+        guard let id = selection, !isQueued(id) else { return }
         if folder == .bucket(.project) { store.clearPlan(for: id) } else { store.clearSuggestion(for: id) }
         jevResults[id] = nil
         localFailures[id] = nil
