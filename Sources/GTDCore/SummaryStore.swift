@@ -31,6 +31,7 @@ public final class SummaryStore {
         var contentKey: String?
         var header: CachedHeader?
         var suggestion: TriageSuggestion?
+        var categorisationPrompt: String?
         var plan: ProjectPlan?
         var lastUsed: Date
     }
@@ -64,7 +65,11 @@ public final class SummaryStore {
 
     // MARK: Reading (safe to call from a view)
 
-    public func suggestion(for id: String) -> TriageSuggestion? { entries[id]?.suggestion }
+    public func suggestion(for id: String, prompt: String? = nil) -> TriageSuggestion? {
+        guard let entry = entries[id] else { return nil }
+        if let prompt, (entry.categorisationPrompt ?? TriagePrompts.local) != prompt { return nil }
+        return entry.suggestion
+    }
     public func plan(for id: String) -> ProjectPlan? { entries[id]?.plan }
 
     /// The cached list header, only if Gmail reports the thread unchanged since it was stored.
@@ -96,8 +101,8 @@ public final class SummaryStore {
         scheduleSave()
     }
 
-    public func setSuggestion(_ suggestion: TriageSuggestion?, for thread: GmailThread) {
-        mutate(thread) { $0.suggestion = suggestion }
+    public func setSuggestion(_ suggestion: TriageSuggestion?, for thread: GmailThread, prompt: String? = nil) {
+        mutate(thread) { $0.suggestion = suggestion; $0.categorisationPrompt = prompt }
     }
 
     public func setPlan(_ plan: ProjectPlan?, for thread: GmailThread) {
@@ -113,6 +118,9 @@ public final class SummaryStore {
         saveTask?.cancel()
         if let fileURL { try? FileManager.default.removeItem(at: fileURL) }
     }
+
+    public func entriesContentKey(for id: String) -> String? { entries[id]?.contentKey }
+    public static func contentKeyForCategorisation(_ thread: GmailThread) -> String { contentKey(of: thread) }
 
     // MARK: Internals
 

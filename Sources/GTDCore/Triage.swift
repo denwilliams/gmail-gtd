@@ -100,17 +100,18 @@ public struct Triager: Sendable {
     // The on-device model has a small context window, so threads are trimmed hard.
     private static let maxChars = 6000
     /// Greedy decoding: the same thread always gets the same answer, so results are stable and the prompt can be tuned.
-    private static let deterministic = GenerationOptions(samplingMode: .greedy)
+    private static let deterministic = GenerationOptions(sampling: .greedy)
 
     public init() {}
 
-    public func suggest(for thread: GmailThread, me: String? = nil) async throws -> TriageSuggestion {
+    public func suggest(for thread: GmailThread, me: String? = nil, prompt: String = TriagePrompts.local) async throws -> TriageSuggestion {
+        try TriagePrompts.validate(prompt, maxBytes: TriagePrompts.localMaxBytes, source: "Local")
         let model = SystemLanguageModel.default
         guard case .available = model.availability else {
             throw TriageError.modelUnavailable(String(describing: model.availability))
         }
         // Two independent requests, run together: the pair finishes in roughly 1.2x one request, not 2x.
-        async let classification = Self.classify(thread, me: me)
+        async let classification = Self.classify(thread, me: me, instructions: prompt)
         async let summary = Self.summarise(thread, me: me)
         let (t, longSummary) = try await (classification, summary)
         let bucket = TriageRules.bucket(whoActs: t.whoActs.rawValue, kind: t.kind.rawValue, asksUser: t.asksUser)
@@ -121,12 +122,8 @@ public struct Triager: Sendable {
             waitingOn: bucket == .waitingFor && !t.waitingOn.isEmpty ? t.waitingOn : nil)
     }
 
-    private static func classify(_ thread: GmailThread, me: String?) async throws -> GeneratedTriage {
-        let session = LanguageModelSession(instructions: """
-            You read email for someone using Getting Things Done. Messages marked (you) were written \
-            by the user. Work out who has the next move and what kind of thread it is. If the last \
-            message was written by someone else and asks the user for anything, the user must act.
-            """)
+    private static func classify(_ thread: GmailThread, me: String?, instructions: String) async throws -> GeneratedTriage {
+        let session = LanguageModelSession(instructions: instructions)
         return try await session.respond(to: prompt(for: thread, me: me), generating: GeneratedTriage.self, options: deterministic).content
     }
 
@@ -197,7 +194,7 @@ public struct Triager: Sendable {
 
 public struct Triager: Sendable {
     public init() {}
-    public func suggest(for thread: GmailThread, me: String? = nil) async throws -> TriageSuggestion {
+    public func suggest(for thread: GmailThread, me: String? = nil, prompt: String = TriagePrompts.local) async throws -> TriageSuggestion {
         throw TriageError.modelUnavailable("FoundationModels is not available on this platform")
     }
     public func digest(nextActions: [String], waitingFor: [String]) async throws -> String {

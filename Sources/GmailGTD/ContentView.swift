@@ -5,7 +5,13 @@ struct ContentView: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
-        if model.signedIn { MailView() } else { SignInView() }
+        Group {
+            if model.signedIn { MailView() } else { SignInView() }
+        }
+        .sheet(isPresented: Binding(get: { model.showingCategorisationSettings },
+                                    set: { model.showingCategorisationSettings = $0 })) {
+            CategorisationSettingsView().environment(model)
+        }
     }
 }
 
@@ -93,6 +99,7 @@ struct MailView: View {
         }
         .toolbar {
             ToolbarItem { Button("Refresh", systemImage: "arrow.clockwise") { Task { await model.refresh() } } }
+            ToolbarItem { Button("Categorisation Settings", systemImage: "slider.horizontal.3") { model.showingCategorisationSettings = true } }
             ToolbarItem { Button("Sign Out") { model.signOut() } }
         }
     }
@@ -193,7 +200,7 @@ struct RowView: View {
     let row: ThreadRow
 
     var body: some View {
-        let suggestion = model.store.suggestion(for: row.id)
+        let suggestion = model.localSuggestion(for: row.id)
         VStack(alignment: .leading, spacing: 2) {
             HStack {
                 Text(row.loaded ? row.from.displayName : "Sender name")
@@ -244,6 +251,15 @@ struct ThreadDetailView: View {
         if let thread = model.detail {
             VStack(spacing: 0) {
                 if model.folder == .inbox { TriageBar(threadID: thread.id) } else { BucketBar(threadID: thread.id) }
+                if model.showsFiledJevStatus {
+                    VStack(alignment: .leading, spacing: 8) {
+                        if model.suggestion == nil, let note = model.aiNote {
+                            Text("Local model: \(note)").font(.caption).foregroundStyle(.secondary)
+                        }
+                        JevStatusView(showsApproval: true)
+                    }
+                    .padding(.horizontal, 10).padding(.bottom, 8)
+                }
                 Picker("View", selection: Binding(get: { model.detailTab }, set: { model.chooseTab($0) })) {
                     Text("Summary").tag(DetailTab.summary)
                     Text("Original").tag(DetailTab.original)
@@ -380,27 +396,39 @@ struct TriageBar: View {
                 Text(note).font(.caption).foregroundStyle(.secondary)
             }
             if let s = model.suggestion {
-                HStack(alignment: .top) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Suggested: \(s.bucket.title)").font(.headline).foregroundStyle(s.bucket.color)
-                        if !s.nextAction.isEmpty { Text("Next: \(s.nextAction)").foregroundStyle(.secondary).lineLimit(1) }
-                    }
-                    Spacer()
-                    Button("Accept") { Task { await model.fileSelected(into: s.bucket) } }
-                        .buttonStyle(.borderedProminent).tint(s.bucket.color)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Local model: \(s.bucket.title)").font(.headline).foregroundStyle(s.bucket.color)
+                    if !s.nextAction.isEmpty { Text("Next: \(s.nextAction)").foregroundStyle(.secondary).lineLimit(1) }
                 }
+            }
+            JevStatusView()
+            HStack {
+                Text(model.categorisationSettings.jevEnabled ? "Approve uses Jev. Manual filing is always available." : "Approve uses the local model.")
+                    .font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Button("Approve") { Task { await model.acceptSuggestion() } }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(model.approvalBucket == nil)
             }
         }
         .padding(10)
     }
 }
 
-/// The on-device summary of the open thread.
+/// The on-device summary of the open thread (Jev returns a category, not generated prose).
 struct SummaryView: View {
     @Environment(AppModel.self) private var model
     let thread: GmailThread
 
     var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            // Inbox and active filed folders already show status above the tab picker.
+            if model.folder != .inbox && !model.showsFiledJevStatus { JevStatusView() }
+            summaryContent
+        }
+    }
+
+    @ViewBuilder private var summaryContent: some View {
         if let s = model.suggestion {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
@@ -409,7 +437,7 @@ struct SummaryView: View {
                     if !s.details.isEmpty { Text(s.details).font(.body).lineSpacing(3) }
                     if !s.nextAction.isEmpty { Label("Next: \(s.nextAction)", systemImage: "arrow.right.circle") }
                     if let w = s.waitingOn { Label("Waiting on \(w)", systemImage: "hourglass") }
-                    Label("Suggested: \(s.bucket.title)", systemImage: Folder.bucket(s.bucket).symbol)
+                    Label("Local model: \(s.bucket.title)", systemImage: Folder.bucket(s.bucket).symbol)
                         .foregroundStyle(s.bucket.color)
                     Text(participants).font(.caption).foregroundStyle(.secondary)
                 }
