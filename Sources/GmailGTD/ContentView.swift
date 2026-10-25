@@ -75,6 +75,7 @@ struct MailView: View {
         }
         .navigationTitle(model.folder.title)
         .navigationSubtitle(model.folder == .today ? "" : model.listSubtitle)
+        .background(ApprovalShortcutHandler(model: model))
         .defaultFocus($listFocused, true)
         .onAppear { listFocused = true }
         // Switching folder or filing a thread replaces the focused row, which makes the list drop focus;
