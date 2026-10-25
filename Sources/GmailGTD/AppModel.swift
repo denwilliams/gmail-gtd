@@ -790,6 +790,13 @@ final class AppModel {
 
     // MARK: - Today
 
+    /// Cached text only: hovering must not fetch mail or start a model request.
+    func nextActionSummary(for id: String) -> String? {
+        guard let summary = localSuggestion(for: id)?.summary
+            .trimmingCharacters(in: .whitespacesAndNewlines), !summary.isEmpty else { return nil }
+        return summary
+    }
+
     func loadToday() async {
         guard let client else { return }
         loading = true; defer { loading = false }
