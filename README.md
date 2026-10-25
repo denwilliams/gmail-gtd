@@ -90,7 +90,12 @@ configure the token/prompts in the app. Summaries, digests and project plans rem
 
 Integration uses [TypeSafe System One](https://docs.typesafe.ai/introduction/quickstart),
 a Bearer-authenticated `POST https://api.typesafe.ai/v1/systemone` with a single typed Choice question
-and the pinned model `jev-1.14.0`. It returns a GTD category, not generated summaries/actions.
+and the pinned model `jev-1.14.0`. It returns a GTD category and per-category probabilities,
+not generated summaries/actions. The Noise estimate is the documented
+[Choice probability](https://docs.typesafe.ai/primitives/choice#response-structure)
+`answers.bucket.probabilities.noise`, **not** the separate `confidence` statistic or a value
+inferred from the selected category. No extra provider questions/calls are needed, and custom
+classification prompts and request budgets are unchanged.
 The [documented standard limits](https://docs.typesafe.ai/models) are 64k tokens per request and
 32k per question (email state + instructions + criteria). No experimental long-context header is used.
 Local prompts allow 2,000 UTF-8 bytes alongside the existing 6,000-character thread budget; Jev
@@ -112,6 +117,29 @@ swift test
 The PR test workflow runs both on a macOS 26 runner. Jev tests inject mocked HTTP transport and never
 need a token or send real email. A live smoke test is optional: opt in with your own token and sample
 mail, verify both categories, press Approve, then disable Jev and verify local-only approval.
+
+## De-noise confidence threshold
+
+In the Inbox, choose a **Minimum Noise estimate** (default 90%, 0–100% in 1% steps).
+De-noise Mode requires ten loaded inbox threads whose active approval category is Noise
+and whose finite, in-range score meets the threshold inclusively. It uses Jev's Noise probability
+when Jev is enabled, otherwise the local AFM self-estimate. It never borrows the other source's
+score or treats missing/invalid scores as high confidence, even at 0%.
+
+AFM uses Apple's supported [guided numeric generation](https://developer.apple.com/documentation/foundationmodels/generating-swift-data-structures-with-guided-generation)
+with a [bounded Double](https://developer.apple.com/documentation/foundationmodels/generationguide/range(_:))
+in the existing classification request. This is the model's **self-estimate**, not a native token
+probability. Its reliability has not been measured on a labelled email dataset. Both sources are
+**model estimates, not promises of calibrated accuracy**: 90% does not guarantee 90% correct filing.
+The local classification rules and separate summary request remain unchanged.
+
+The slider filters scores already computed; moving it does not classify again or write to Gmail.
+Changing it ends any current review and dismisses its correction picker. Start a new batch, review
+its ten emails and explicitly press LGTM; stale actions cannot approve the replacement. Each card
+shows its snapshotted Noise estimate. Not Noise corrections still shrink the snapshot without
+adding replacements. Threshold is session-only. Existing unscored local caches remain unscored
+until normal Regenerate supplies a score; there is no automatic cache refresh or cache redesign.
+Jev scores remain in memory with their categories; local scores follow the existing summary cache.
 
 ## Local Corrections
 

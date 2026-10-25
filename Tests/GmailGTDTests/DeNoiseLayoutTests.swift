@@ -9,8 +9,8 @@ private func layoutRow(sender: String = "Sender", subject: String = "Subject",
               date: dated ? Date(timeIntervalSince1970: 1_700_000_000) : nil, unread: false)
 }
 
-@MainActor private func cardSize(_ row: ThreadRow, width: CGFloat) throws -> CGSize {
-    let image = try #require(ImageRenderer(content: DeNoiseCard(row: row, notNoise: {})
+@MainActor private func cardSize(_ row: ThreadRow, width: CGFloat, score: Double? = nil) throws -> CGSize {
+    let image = try #require(ImageRenderer(content: DeNoiseCard(row: row, noiseLikelihood: score, notNoise: {})
         .frame(width: width)).nsImage)
     return image.size
 }
@@ -31,6 +31,9 @@ func deNoiseLongTextStaysAtTwoLinesAndWithinTheProposedWidth(width: CGFloat) thr
             let size = try cardSize(row, width: width)
             #expect(size.width == width)
             #expect(abs(size.height - short.height) <= 1)
+            let scored = try cardSize(row, width: width, score: 0.95)
+            #expect(scored.width == width)
+            #expect(abs(scored.height - short.height) <= 1)
         }
     }
 }

@@ -49,15 +49,16 @@ private actor DeNoiseMail: MailService {
 private actor DeNoiseRemote {
     private var held: Bool
     let result: GTDBucket?
+    let score: Double?
     private(set) var calls = 0
-    init(result: GTDBucket?, held: Bool = false) { self.result = result; self.held = held }
+    init(result: GTDBucket?, held: Bool = false, score: Double? = 0.95) { self.result = result; self.held = held; self.score = score }
     func release() { held = false }
-    func classify() async throws -> GTDBucket {
+    func classify() async throws -> JevClassification {
         calls += 1
         let deadline = ContinuousClock.now.advanced(by: .seconds(4))
         while held && ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
         guard let result else { throw DeNoiseTestError.unavailable }
-        return result
+        return JevClassification(bucket: result, noiseLikelihood: score)
     }
 }
 
@@ -67,7 +68,7 @@ private actor DeNoiseRemote {
     #expect(await condition(), "Timed out waiting for De-noise state")
 }
 
-@MainActor private func deNoiseFixture(remote: DeNoiseRemote? = nil, localBucket: GTDBucket = .noise) async throws -> (AppModel, DeNoiseMail) {
+@MainActor private func deNoiseFixture(remote: DeNoiseRemote? = nil, localBucket: GTDBucket = .noise, localScore: Double? = 0.95) async throws -> (AppModel, DeNoiseMail) {
     let mail = DeNoiseMail()
     try await mail.prepare()
     var settings = CategorisationSettings(); settings.jevEnabled = remote != nil
@@ -87,7 +88,7 @@ private actor DeNoiseRemote {
         let thread = try await mail.thread(row.id, full: true)
         let last = try #require(thread.messages?.last)
         model.store.note(thread, header: nil)
-        model.store.setSuggestion(TriageSuggestion(bucket: localBucket, nextAction: "", summary: "A newsletter."),
+        model.store.setSuggestion(TriageSuggestion(bucket: localBucket, nextAction: "", summary: "A newsletter.", noiseLikelihood: localScore),
                                   for: thread, prompt: settings.localPrompt)
         loaded.append(ThreadRow(id: row.id, subject: last.subject, from: last.from,
                                 snippet: row.snippet, date: last.date, unread: last.isUnread))
@@ -259,7 +260,7 @@ func deNoiseCorrectionsShrinkAndLGTMFilesOnlyRemainingSnapshot(bucket: GTDBucket
     #expect(await mail.writes.count == (correction ? 0 : 9))
 }
 
-@Test(arguments: ["navigation", "refresh", "settings", "settings-open", "undo", "signout", "leave"]) @MainActor
+@Test(arguments: ["navigation", "refresh", "settings", "settings-open", "undo", "signout", "leave", "threshold"]) @MainActor
 func deNoiseContextChangesInvalidateStaleActions(change: String) async throws {
     let (model, mail) = try await deNoiseFixture()
     defer { model.demo = true; model.signOut() }
@@ -274,6 +275,7 @@ func deNoiseContextChangesInvalidateStaleActions(change: String) async throws {
     case "settings-open": model.showingCategorisationSettings = true
     case "undo": await model.undoLastMove()
     case "signout": model.signOut()
+    case "threshold": model.setDeNoiseThreshold(0.80)
     default: model.endDeNoiseMode()
     }
     #expect(model.deNoiseBatch == nil)
@@ -317,6 +319,98 @@ func deNoiseContextChangesInvalidateStaleActions(change: String) async throws {
     model.rows.removeAll { $0.id == current.rows[0].id }
     #expect(!model.canApproveDeNoiseBatch)
     model.approveDeNoiseBatch(current.id)
+    #expect(model.deNoiseBatch == nil)
+    #expect(await mail.writes.isEmpty)
+}
+
+@Test(arguments: [0.0, 0.899999, 0.90, 0.95, 1.0, -0.1, 1.1, Double.nan, .infinity]) @MainActor
+func deNoiseLocalScoreMustMeetInclusiveThreshold(score: Double) async throws {
+    let (model, mail) = try await deNoiseFixture(localScore: score)
+    defer { model.signOut() }
+    #expect(model.deNoiseThreshold == 0.90)
+    #expect(model.canStartDeNoiseMode == (NoiseLikelihood.validated(score) != nil && score >= 0.90))
+    model.setDeNoiseThreshold(0)
+    #expect(model.canStartDeNoiseMode == (NoiseLikelihood.validated(score) != nil))
+    model.setDeNoiseThreshold(1)
+    #expect(model.canStartDeNoiseMode == (score == 1))
+    #expect(await mail.writes.isEmpty)
+}
+
+@Test @MainActor func deNoiseOldUnscoredLocalSuggestionsDoNotQualifyEvenAtZero() async throws {
+    let (model, mail) = try await deNoiseFixture(localScore: nil)
+    defer { model.signOut() }
+    model.setDeNoiseThreshold(0)
+    #expect(model.deNoiseEligibleRows.isEmpty)
+    model.startDeNoiseMode()
+    #expect(model.deNoiseBatch == nil)
+    #expect(await mail.writes.isEmpty)
+}
+
+@Test(arguments: [nil, 0.899999, 0.90, 1.0, -0.1, 1.1, Double.nan] as [Double?]) @MainActor
+func deNoiseNeverBorrowsLocalScoreForJev(score: Double?) async throws {
+    let remote = DeNoiseRemote(result: .noise, score: score)
+    let (model, mail) = try await deNoiseFixture(remote: remote, localScore: 1)
+    defer { model.signOut() }
+    for row in model.rows { model.rowAppeared(row.id) }
+    let count = model.rows.count
+    try await deNoiseEventually { await remote.calls == count && model.rows.allSatisfy { !model.isQueued($0.id) } }
+    #expect(model.canStartDeNoiseMode == (NoiseLikelihood.validated(score).map { $0 >= 0.90 } ?? false))
+    model.setDeNoiseThreshold(0)
+    #expect(model.canStartDeNoiseMode == (NoiseLikelihood.validated(score) != nil))
+    model.categorisationSettings.jevEnabled = false
+    #expect(model.canStartDeNoiseMode) // Switching source uses the local score, not Jev's.
+    #expect(await mail.writes.isEmpty)
+}
+
+@Test @MainActor func deNoiseThresholdChangesOnlyFilterCachedScoresAndRequireNewReview() async throws {
+    let remote = DeNoiseRemote(result: .noise, score: 0.90)
+    let (model, mail) = try await deNoiseFixture(remote: remote)
+    defer { model.signOut() }
+    for row in model.rows { model.rowAppeared(row.id) }
+    let count = model.rows.count
+    try await deNoiseEventually { await remote.calls == count && model.rows.allSatisfy { !model.isQueued($0.id) } }
+    model.startDeNoiseMode()
+    let old = try #require(model.deNoiseBatch)
+    #expect(old.estimates.count == 10)
+    #expect(old.estimates.values.allSatisfy { $0 == 0.90 })
+    model.setDeNoiseThreshold(0.90) // Setting the same threshold preserves the reviewed snapshot.
+    #expect(model.deNoiseBatch?.id == old.id)
+    model.beginDeNoiseCorrection(for: old.rows[0].id)
+    let correction = try #require(model.deNoiseCorrection)
+    model.setDeNoiseThreshold(0.91)
+    #expect(model.deNoiseBatch == nil)
+    #expect(model.deNoiseCorrection == nil)
+    #expect(!model.canStartDeNoiseMode)
+    model.confirmDeNoiseCorrection(.reference, correctionID: correction.id)
+    model.approveDeNoiseBatch(old.id)
+    for threshold in [0.0, 0.1, 0.6, 1.0, 0.90] { model.setDeNoiseThreshold(threshold) }
+    #expect(model.deNoiseEligibleRows.count == count)
+    #expect(model.deNoiseBatch == nil) // Filtering never silently starts a replacement batch.
+    #expect(model.undoStack.isEmpty)
+    #expect(model.corrections.records.isEmpty)
+    model.startDeNoiseMode()
+    let new = try #require(model.deNoiseBatch)
+    #expect(new.id != old.id)
+    model.approveDeNoiseBatch(old.id)
+    #expect(model.deNoiseBatch?.id == new.id)
+    await Task.yield()
+    #expect(await remote.calls == count)
+    #expect(await mail.writes.isEmpty)
+}
+
+@Test @MainActor func deNoiseApprovalRevalidatesScoresWithoutReplacingReviewedMembers() async throws {
+    let (model, mail) = try await deNoiseFixture()
+    defer { model.signOut() }
+    model.startDeNoiseMode()
+    let batch = try #require(model.deNoiseBatch)
+    let member = batch.rows[0]
+    let thread = try await mail.thread(member.id, full: true)
+    model.store.setSuggestion(TriageSuggestion(bucket: .noise, nextAction: "", summary: "", noiseLikelihood: 0.5),
+                              for: thread, prompt: model.categorisationSettings.localPrompt)
+    #expect(model.deNoiseBatch?.rows == batch.rows)
+    #expect(model.deNoiseBatch?.estimates[member.id] == 0.95) // Display is the reviewed estimate.
+    #expect(!model.canApproveDeNoiseBatch)
+    model.approveDeNoiseBatch(batch.id)
     #expect(model.deNoiseBatch == nil)
     #expect(await mail.writes.isEmpty)
 }

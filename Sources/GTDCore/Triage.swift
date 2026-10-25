@@ -8,6 +8,8 @@ public struct TriageSuggestion: Sendable, Codable {
     public var nextAction: String
     public var summary: String
     public var waitingOn: String?
+    /// AFM self-estimate, not a token probability or a calibrated confidence measure. Old caches lack it.
+    public var noiseLikelihood: Double? = nil
 
     /// The first sentence: short enough for the list, and a complete thought on its own.
     public var headline: String { summary.firstSentence }
@@ -77,6 +79,8 @@ struct GeneratedTriage {
     var nextAction: String
     @Guide(description: "Name of the person the user is waiting on. Empty unless whoActs is someoneElse.")
     var waitingOn: String
+    @Guide(description: "Estimate how likely this thread is noise under the classification instructions: 0 means not noise, 1 means noise, intermediate values express uncertainty. Do not infer certainty just from the chosen kind.", .range(0.0...1.0))
+    var noiseLikelihood: Double
 }
 
 /// The summary people read. Made by its own request so it can be long and fluent without nudging the
@@ -119,7 +123,8 @@ public struct Triager: Sendable {
             bucket: bucket,
             nextAction: bucket == .nextAction || bucket == .project ? t.nextAction : "",
             summary: longSummary,
-            waitingOn: bucket == .waitingFor && !t.waitingOn.isEmpty ? t.waitingOn : nil)
+            waitingOn: bucket == .waitingFor && !t.waitingOn.isEmpty ? t.waitingOn : nil,
+            noiseLikelihood: NoiseLikelihood.validated(t.noiseLikelihood))
     }
 
     private static func classify(_ thread: GmailThread, me: String?, instructions: String) async throws -> GeneratedTriage {

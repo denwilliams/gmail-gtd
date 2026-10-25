@@ -12,7 +12,7 @@ actor CategorisationCollector {
         switch event {
         case .local(let suggestion): output.local = suggestion
         case .localFailure(let message): output.localError = message
-        case .jev(let bucket): output.jev = .success(bucket)
+        case .jev(let result): output.jev = .success(result.bucket, noiseLikelihood: result.noiseLikelihood)
         case .jevFailure(let message): output.jev = .failure(message)
         }
     }

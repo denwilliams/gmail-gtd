@@ -3,13 +3,13 @@ import Foundation
 public enum CategorisationSource: Hashable, Sendable { case local, jev }
 
 public enum CategorisationEvent: Sendable {
-    case local(TriageSuggestion), localFailure(String), jev(GTDBucket), jevFailure(String)
+    case local(TriageSuggestion), localFailure(String), jev(JevClassification), jevFailure(String)
 }
 
 /// Independent child tasks publish results as each finishes. Jev failure cannot cancel local work.
 public struct Categoriser: Sendable {
     public typealias Local = @Sendable (GmailThread, String?, String) async throws -> TriageSuggestion
-    public typealias Remote = @Sendable (GmailThread, String?, String, String) async throws -> GTDBucket
+    public typealias Remote = @Sendable (GmailThread, String?, String, String) async throws -> JevClassification
     private let local: Local
     private let remote: Remote
 

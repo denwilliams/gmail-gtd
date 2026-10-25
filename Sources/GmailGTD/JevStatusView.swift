@@ -11,7 +11,7 @@ struct JevStatusPresentation {
 
     init(state: JevState?) {
         switch state {
-        case .success(let bucket):
+        case .success(let bucket, _):
             text = "Jev: \(bucket.title)"; self.bucket = bucket; pending = false; failed = false
         case .failure(let message):
             text = "Jev: \(message)"; bucket = nil; pending = false; failed = true

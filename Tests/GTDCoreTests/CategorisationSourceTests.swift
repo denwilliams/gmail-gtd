@@ -7,12 +7,13 @@ import Testing
     let categoriser = Categoriser(local: { _, _, _ in
         Issue.record("Jev queue must not start local work")
         return TriageSuggestion(bucket: .reference, nextAction: "", summary: "", waitingOn: nil)
-    }, remote: { _, _, _, _ in .noise })
+    }, remote: { _, _, _, _ in JevClassification(bucket: .noise) })
     let collector = CategorisationCollector()
     await categoriser.run(GmailThread(id: "t", historyId: "1", messages: []), me: nil,
                           settings: settings, token: "mock", sources: [.jev]) { event in
         await collector.record(event)
-        guard case .jev(.noise) = event else { Issue.record("Expected only Jev event"); return }
+        guard case .jev(let result) = event else { Issue.record("Expected only Jev event"); return }
+        #expect(result.bucket == .noise)
     }
     #expect(await collector.output.jev?.bucket == .noise)
 }
@@ -21,7 +22,7 @@ import Testing
     var settings = CategorisationSettings(); settings.jevEnabled = true
     let categoriser = Categoriser(local: { _, _, _ in
         TriageSuggestion(bucket: .reference, nextAction: "", summary: "", waitingOn: nil)
-    }, remote: { _, _, _, _ in Issue.record("Local queue must not start Jev work"); return .noise })
+    }, remote: { _, _, _, _ in Issue.record("Local queue must not start Jev work"); return JevClassification(bucket: .noise) })
     let collector = CategorisationCollector()
     await categoriser.run(GmailThread(id: "t", historyId: "1", messages: []), me: nil,
                           settings: settings, token: "mock", sources: [.local]) { event in
@@ -36,7 +37,7 @@ import Testing
     let categoriser = Categoriser(local: { _, _, _ in
         Issue.record("No local work requested")
         return TriageSuggestion(bucket: .reference, nextAction: "", summary: "", waitingOn: nil)
-    }, remote: { _, _, _, _ in Issue.record("Opt-out must not call Jev"); return .noise })
+    }, remote: { _, _, _, _ in Issue.record("Opt-out must not call Jev"); return JevClassification(bucket: .noise) })
     await categoriser.run(GmailThread(id: "t", historyId: "1", messages: []), me: nil,
                           settings: CategorisationSettings(), token: "mock", sources: [.jev]) { _ in
         Issue.record("Opt-out must not publish Jev results")

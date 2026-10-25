@@ -78,7 +78,7 @@ private actor PlanProbe {
         var settings = CategorisationSettings(); settings.jevEnabled = true
         let categoriser = Categoriser(local: { _, _, _ in
             throw TriageError.modelUnavailable("disabled for test")
-        }, remote: { _, _, _, _ in .project })
+        }, remote: { _, _, _, _ in JevClassification(bucket: .project) })
         let model = AppModel(signedIn: true, settings: settings, folder: .bucket(bucket),
                              categoriser: categoriser, loadJevToken: { nil })
         model.demo = true   // Cleanup must never touch real-account credentials.
