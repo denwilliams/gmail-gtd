@@ -66,7 +66,7 @@ struct ThreadRow: Identifiable, Hashable {
 final class AppModel {
     var clientID = OAuthConfig.load()?.clientID ?? ""
     var clientSecret = OAuthConfig.load()?.clientSecret ?? ""
-    var signedIn = TokenStore.load() != nil || AppModel.launchedInDemo
+    var signedIn: Bool
     var demo = false
     var notice: String?
     var folder: Folder = .today { didSet { guard folder != oldValue else { return }; Task { await folderChanged() } } }
@@ -78,15 +78,25 @@ final class AppModel {
     var detailTab: DetailTab = .original
     private var tabChosenByUser = false
     var aiNote: String?   // Why the on-device model produced nothing, shown inline rather than as an error.
-    var categorisationSettings = CategorisationSettings.load()
+    var categorisationSettings: CategorisationSettings
     var showingCategorisationSettings = false
     private var categorisationGeneration = UUID()
     private var localFailures: [String: String] = [:]
     private var jevResults: [String: JevState] = [:]
+    /// A model-wide planning failure stays stopped until explicit retry/refresh, not every scroll.
+    private var planningUnavailable: String?
     var suggestion: TriageSuggestion? { selection.flatMap { localSuggestion(for: $0) } }
     var jevState: JevState? { selection.flatMap { jevResults[$0] } }
     var approvalBucket: GTDBucket? {
         ApprovalPolicy.bucket(jevEnabled: categorisationSettings.jevEnabled, local: suggestion, jev: jevState)
+    }
+
+    /// Filed triage folders need Jev status above both tabs, even when no local summary exists.
+    var showsFiledJevStatus: Bool {
+        categorisationSettings.jevEnabled && (folder == .bucket(.nextAction) || folder == .bucket(.waitingFor))
+    }
+    var jevStatus: JevStatusPresentation? {
+        categorisationSettings.jevEnabled ? JevStatusPresentation(state: jevState) : nil
     }
 
     func localSuggestion(for id: String) -> TriageSuggestion? {
@@ -151,6 +161,22 @@ final class AppModel {
     private var labelIDs: [GTDBucket: String] = [:]
     private var email: String?
     private let triager = Triager()
+    private let makePlan: @Sendable (GmailThread) async throws -> ProjectPlan
+    private let categoriser: Categoriser
+    private let loadJevToken: @Sendable () -> String?
+
+    init(signedIn: Bool = TokenStore.load() != nil || AppModel.launchedInDemo,
+         settings: CategorisationSettings = .load(), folder: Folder = .today,
+         makePlan: @escaping @Sendable (GmailThread) async throws -> ProjectPlan = { try await Triager().plan(for: $0) },
+         categoriser: Categoriser = Categoriser(),
+         loadJevToken: @escaping @Sendable () -> String? = { JevTokenStore.load() }) {
+        self.signedIn = signedIn
+        self.categorisationSettings = settings
+        self.folder = folder
+        self.makePlan = makePlan
+        self.categoriser = categoriser
+        self.loadJevToken = loadJevToken
+    }
     // On-device AI queue: threads waiting for a suggestion or plan, top of the list first.
     private(set) var pending: [String] = []
     private(set) var inflight: Set<String> = []
@@ -204,6 +230,7 @@ final class AppModel {
         pending = []
         enqueueTask?.cancel()
         invalidateCategorisation()
+        planningUnavailable = nil
         demo = false; notice = nil
         undoStack = []; undoToast = nil; quietRefreshTask?.cancel()
         store.clear(); store = SummaryStore()   // Summaries are private: sign-out deletes them.
@@ -221,8 +248,10 @@ final class AppModel {
         do { await connect(using: try GmailClient(auth: GmailAuth(config: config)), persist: true) } catch { self.error = error.localizedDescription }
     }
 
-    private func connect(using base: any MailService, persist: Bool) async {
+    // Internal for app-level tests against in-memory mail and injected model/provider implementations.
+    func connect(using base: any MailService, persist: Bool) async {
         invalidateCategorisation()
+        planningUnavailable = nil
         // Every read goes through the cache, so a thread is fetched once however many views want it.
         let client = CachedMailService(base)
         // Demo mail stays in memory so it resets on relaunch; a real mailbox keeps its summaries on disk.
@@ -362,7 +391,7 @@ final class AppModel {
             detail = thread
             apply(thread, id: id)
             if localSuggestion(for: id) != nil, !tabChosenByUser { detailTab = .summary }   // note() may have dropped a stale one
-            aiNote = localFailures[id]
+            aiNote = folder == .bucket(.project) ? planningUnavailable : localFailures[id]
             if aiFolder && !isDone(id) { prioritize(id) }
         } catch { if selection == id { self.error = error.localizedDescription } }
     }
@@ -400,6 +429,8 @@ final class AppModel {
     func refresh() async {
         await cache?.invalidateAll()
         failed = []
+        planningUnavailable = nil
+        aiNote = nil
         if client == nil && signedIn {
             error = nil
             if demo { await startDemo() } else { await connect() }
@@ -428,7 +459,7 @@ final class AppModel {
     }
 
     private func isDone(_ id: String) -> Bool {
-        if folder == .bucket(.project) { return store.plan(for: id) != nil }
+        if folder == .bucket(.project) { return store.plan(for: id) != nil || planningUnavailable != nil }
         let localDone = localSuggestion(for: id) != nil || localFailures[id] != nil
         return localDone && (!categorisationSettings.jevEnabled || jevResults[id]?.isFinished == true)
     }
@@ -514,19 +545,25 @@ final class AppModel {
             let thread = try await client.thread(id, full: true)
             guard generation == categorisationGeneration, signedIn else { return }
             note(thread)
-            if projects { store.setPlan(try await triager.plan(for: thread), for: thread) }
-            else {
+            if projects {
+                let plan = try await makePlan(thread)
+                guard generation == categorisationGeneration, signedIn else { return }
+                store.setPlan(plan, for: thread)
+            } else {
                 let settings = categorisationSettings
                 let key = SummaryStore.contentKeyForCategorisation(thread)
                 if settings.jevEnabled { jevResults[id] = .pending }
-                await Categoriser().run(thread, me: email, settings: settings,
-                                        token: settings.jevEnabled ? JevTokenStore.load() : nil) { [weak self] event in
+                await categoriser.run(thread, me: email, settings: settings,
+                                      token: settings.jevEnabled ? loadJevToken() : nil) { [weak self] event in
                     await self?.receive(event, for: thread, settings: settings, generation: generation, key: key)
                 }
                 if generation != categorisationGeneration { scheduleEnqueue() }
             }
         } catch let unavailable as TriageError {
-            pending.removeAll()   // The model isn't there; don't retry it for every row.
+            guard generation == categorisationGeneration, signedIn else { return }
+            // Clearing pending alone isn't enough: drain re-enqueues visible/selected threads.
+            if projects { planningUnavailable = unavailable.localizedDescription }
+            pending.removeAll()
             aiNote = unavailable.localizedDescription
         } catch {
             failed.insert(id)   // Skip this thread from now on; carry on with the rest.
@@ -555,7 +592,10 @@ final class AppModel {
     /// Re-runs the model for the open thread, ignoring any cached result.
     func regenerateSelected() {
         guard let id = selection, !isQueued(id) else { return }
-        if folder == .bucket(.project) { store.clearPlan(for: id) } else { store.clearSuggestion(for: id) }
+        if folder == .bucket(.project) {
+            planningUnavailable = nil
+            store.clearPlan(for: id)
+        } else { store.clearSuggestion(for: id) }
         jevResults[id] = nil
         localFailures[id] = nil
         aiNote = nil

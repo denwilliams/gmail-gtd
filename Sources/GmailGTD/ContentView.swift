@@ -251,6 +251,15 @@ struct ThreadDetailView: View {
         if let thread = model.detail {
             VStack(spacing: 0) {
                 if model.folder == .inbox { TriageBar(threadID: thread.id) } else { BucketBar(threadID: thread.id) }
+                if model.showsFiledJevStatus {
+                    VStack(alignment: .leading, spacing: 8) {
+                        if model.suggestion == nil, let note = model.aiNote {
+                            Text("Local model: \(note)").font(.caption).foregroundStyle(.secondary)
+                        }
+                        JevStatusView(showsApproval: true)
+                    }
+                    .padding(.horizontal, 10).padding(.bottom, 8)
+                }
                 Picker("View", selection: Binding(get: { model.detailTab }, set: { model.chooseTab($0) })) {
                     Text("Summary").tag(DetailTab.summary)
                     Text("Original").tag(DetailTab.original)
@@ -392,17 +401,7 @@ struct TriageBar: View {
                     if !s.nextAction.isEmpty { Text("Next: \(s.nextAction)").foregroundStyle(.secondary).lineLimit(1) }
                 }
             }
-            if model.categorisationSettings.jevEnabled {
-                switch model.jevState {
-                case .success(let bucket):
-                    Text("Jev: \(bucket.title)").font(.headline).foregroundStyle(bucket.color)
-                case .failure(let message):
-                    Text("Jev: \(message)").font(.caption).foregroundStyle(.red)
-                    Button("Retry categorisation") { model.regenerateSelected() }.disabled(model.suggesting)
-                case .pending, nil:
-                    HStack { ProgressView().controlSize(.small); Text("Jev: awaiting categorisation…") }
-                }
-            }
+            JevStatusView()
             HStack {
                 Text(model.categorisationSettings.jevEnabled ? "Approve uses Jev. Manual filing is always available." : "Approve uses the local model.")
                     .font(.caption).foregroundStyle(.secondary)
@@ -422,6 +421,14 @@ struct SummaryView: View {
     let thread: GmailThread
 
     var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            // Inbox and active filed folders already show status above the tab picker.
+            if model.folder != .inbox && !model.showsFiledJevStatus { JevStatusView() }
+            summaryContent
+        }
+    }
+
+    @ViewBuilder private var summaryContent: some View {
         if let s = model.suggestion {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
@@ -432,13 +439,6 @@ struct SummaryView: View {
                     if let w = s.waitingOn { Label("Waiting on \(w)", systemImage: "hourglass") }
                     Label("Local model: \(s.bucket.title)", systemImage: Folder.bucket(s.bucket).symbol)
                         .foregroundStyle(s.bucket.color)
-                    if model.categorisationSettings.jevEnabled {
-                        switch model.jevState {
-                        case .success(let bucket): Text("Jev: \(bucket.title)").foregroundStyle(bucket.color)
-                        case .failure(let message): Text("Jev: \(message)").foregroundStyle(.secondary)
-                        case .pending, nil: Text("Jev: awaiting categorisation…").foregroundStyle(.secondary)
-                        }
-                    }
                     Text(participants).font(.caption).foregroundStyle(.secondary)
                 }
                 .padding()

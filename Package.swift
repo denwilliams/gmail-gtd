@@ -14,5 +14,6 @@ let package = Package(
         .executableTarget(name: "GmailGTD", dependencies: ["GTDCore"]),
         .executableTarget(name: "gtd", dependencies: ["GTDCore"]),
         .testTarget(name: "GTDCoreTests", dependencies: ["GTDCore"]),
+        .testTarget(name: "GmailGTDTests", dependencies: ["GmailGTD", "GTDCore"]),
     ]
 )
