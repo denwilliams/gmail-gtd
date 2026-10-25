@@ -19,12 +19,15 @@ final class ForegroundMailRefresh {
     func setActive(_ active: Bool) {
         guard active != self.active else { return }
         self.active = active
-        task?.cancel()
-        task = nil
+        let previous = task
+        previous?.cancel()
+        // Keep cancelled work until it exits: cancellation may still be awaiting a remote write.
         guard active else { return }
         // Capture callbacks, not self, so destroying the owner cancels rather than retains the timer.
         let refresh = refresh, sleep = sleep
         task = Task {
+            // Reactivation must not lose its refresh to the cancelled task's refresh lock.
+            await previous?.value
             guard !Task.isCancelled else { return }
             await refresh()
             while !Task.isCancelled {

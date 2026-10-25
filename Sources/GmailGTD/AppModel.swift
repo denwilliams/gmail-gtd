@@ -543,13 +543,15 @@ final class AppModel {
         rows[i] = Self.row(for: thread, placeholder: rows[i])
     }
 
-    private func loadDetail() async {
+    private func loadDetail(preservingTab: Bool = false) async {
         scheduleQuietRefresh()
         aiNote = nil
         guard let client, let id = selection else { detail = nil; return }
         // Show the summary straight away if there is one; otherwise the original until it is ready.
-        tabChosenByUser = false
-        detailTab = localSuggestion(for: id) != nil ? .summary : .original
+        if !preservingTab {
+            tabChosenByUser = false
+            detailTab = localSuggestion(for: id) != nil ? .summary : .original
+        }
         do {
             let thread = try await client.thread(id, full: true)
             guard selection == id else { return }   // The user has already moved on.
@@ -557,7 +559,7 @@ final class AppModel {
             store.touch(id)
             detail = thread
             apply(thread, id: id)
-            if localSuggestion(for: id) != nil, !tabChosenByUser { detailTab = .summary }   // note() may have dropped a stale one
+            if !tabChosenByUser { detailTab = localSuggestion(for: id) != nil ? .summary : .original }
             aiNote = folder == .bucket(.project) ? planningUnavailable : localFailures[id]
             if aiFolder && !isDone(id) { prioritize(id) }
         } catch { if selection == id { self.error = error.localizedDescription } }
@@ -996,9 +998,12 @@ final class AppModel {
             // A review or sign-out may have happened while the list request was in flight.
             guard !Task.isCancelled, client != nil, folder == openFolder, deNoiseBatch == nil else { return }
             let oldRows = rows
-            let old = Dictionary(oldRows.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-            // Keep rows we already have headers for, so nothing flashes back to a placeholder.
-            rows = page.rows.map { new in old[new.id].flatMap { $0.loaded ? $0 : nil } ?? new }
+            // fetchPage reuses headers only when their history matches the fresh list. Restoring
+            // old loaded rows here would hide replies and prevent visible-row hydration.
+            let staleIDs = Set(page.rows.filter { !$0.loaded }.map(\.id))
+            let selectedNeedsReload = selection.map { staleIDs.contains($0) } ?? false
+            failed.subtract(staleIDs)
+            rows = page.rows
             if force, page.next != nil, oldRows.count >= pageSize {
                 let freshIDs = Set(page.rows.map(\.id))
                 let boundary = oldRows.lastIndex { freshIDs.contains($0.id) }
@@ -1008,6 +1013,9 @@ final class AppModel {
             // Resume from the fresh first-page token; loadMore deduplicates any retained tail.
             nextPageToken = page.next
             selectFirstIfNeeded()
+            // An unchanged selection does not trigger its didSet loader. Revalidate it explicitly;
+            // note() then invalidates content-dependent categorisation for any new reply.
+            if selectedNeedsReload { await loadDetail(preservingTab: true) }
             scheduleEnqueue()
         } catch {
             // A failed background refresh isn't worth interrupting anyone for; the next one will try again.
