@@ -256,7 +256,8 @@ struct ThreadDetailView: View {
                         if model.suggestion == nil, let note = model.aiNote {
                             Text("Local model: \(note)").font(.caption).foregroundStyle(.secondary)
                         }
-                        JevStatusView(showsApproval: true)
+                        ClassificationResultsView()
+                        JevApprovalView()
                     }
                     .padding(.horizontal, 10).padding(.bottom, 8)
                 }
@@ -395,13 +396,10 @@ struct TriageBar: View {
             } else if let note = model.aiNote, model.suggestion == nil {
                 Text(note).font(.caption).foregroundStyle(.secondary)
             }
-            if let s = model.suggestion {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Local model: \(s.bucket.title)").font(.headline).foregroundStyle(s.bucket.color)
-                    if !s.nextAction.isEmpty { Text("Next: \(s.nextAction)").foregroundStyle(.secondary).lineLimit(1) }
-                }
+            ClassificationResultsView()
+            if let s = model.suggestion, !s.nextAction.isEmpty {
+                Text("Next: \(s.nextAction)").foregroundStyle(.secondary).lineLimit(1)
             }
-            JevStatusView()
             HStack {
                 Text(model.categorisationSettings.jevEnabled ? "Approve uses Jev. Manual filing is always available." : "Approve uses the local model.")
                     .font(.caption).foregroundStyle(.secondary)
@@ -423,7 +421,7 @@ struct SummaryView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             // Inbox and active filed folders already show status above the tab picker.
-            if model.folder != .inbox && !model.showsFiledJevStatus { JevStatusView() }
+            if model.folder != .inbox && !model.showsFiledJevStatus && model.suggestion == nil { JevStatusView() }
             summaryContent
         }
     }
@@ -437,8 +435,7 @@ struct SummaryView: View {
                     if !s.details.isEmpty { Text(s.details).font(.body).lineSpacing(3) }
                     if !s.nextAction.isEmpty { Label("Next: \(s.nextAction)", systemImage: "arrow.right.circle") }
                     if let w = s.waitingOn { Label("Waiting on \(w)", systemImage: "hourglass") }
-                    Label("Local model: \(s.bucket.title)", systemImage: Folder.bucket(s.bucket).symbol)
-                        .foregroundStyle(s.bucket.color)
+                    ClassificationResultsView()
                     Text(participants).font(.caption).foregroundStyle(.secondary)
                 }
                 .padding()
