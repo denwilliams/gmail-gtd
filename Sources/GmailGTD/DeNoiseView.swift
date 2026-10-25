@@ -28,22 +28,9 @@ struct DeNoiseView: View {
                                        description: Text("All 10 emails were corrected. Exit to return to the inbox."))
             } else {
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 12) {
+                    LazyVStack(alignment: .leading, spacing: 6) {
                         ForEach(batch.rows) { row in
-                            VStack(alignment: .leading, spacing: 8) {
-                                HStack(alignment: .top) {
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        Text(row.from.displayName).font(.headline)
-                                        Text(row.subject).fontWeight(.medium).textSelection(.enabled)
-                                    }
-                                    Spacer()
-                                    if let date = row.date { Text(date, style: .date).foregroundStyle(.secondary) }
-                                    Button("Not Noise") { model.beginDeNoiseCorrection(for: row.id) }
-                                }
-                                Text(row.snippet).foregroundStyle(.secondary).textSelection(.enabled)
-                            }
-                            .padding().frame(maxWidth: .infinity, alignment: .leading)
-                            .background(.quaternary, in: RoundedRectangle(cornerRadius: 10))
+                            DeNoiseCard(row: row) { model.beginDeNoiseCorrection(for: row.id) }
                         }
                     }
                     .padding()
@@ -56,6 +43,39 @@ struct DeNoiseView: View {
         })) { correction in
             DeNoiseCorrectionView(correction: correction).environment(model)
         }
+    }
+}
+
+/// Text yields space to the date and action, even for long mail headers in narrow panes.
+struct DeNoiseCard: View {
+    let row: ThreadRow
+    let notNoise: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                HStack(spacing: 8) {
+                    Text(row.from.displayName).font(.headline)
+                        .lineLimit(1).truncationMode(.tail)
+                        .frame(minWidth: 0, maxWidth: 160, alignment: .leading)
+                    Text(row.subject).fontWeight(.medium).textSelection(.enabled)
+                        .lineLimit(1).truncationMode(.tail)
+                        .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+                if let date = row.date {
+                    Text(date, style: .date).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: true, vertical: false)
+                }
+                Button("Not Noise", action: notNoise)
+                    .fixedSize(horizontal: true, vertical: false)
+            }
+            Text(row.snippet).foregroundStyle(.secondary).textSelection(.enabled)
+                .lineLimit(1).truncationMode(.tail)
+        }
+        .padding(.horizontal, 12).padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.quaternary, in: RoundedRectangle(cornerRadius: 10))
     }
 }
 
