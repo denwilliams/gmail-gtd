@@ -39,6 +39,10 @@ struct GmailGTDApp: App {
                 .task { await model.start() }
         }
         .commands {
+            CommandGroup(replacing: .appSettings) {
+                Button("Categorisation Settings…") { model.showingCategorisationSettings = true }
+                    .keyboardShortcut(",", modifiers: .command)
+            }
             // Replaces the system Undo: nothing in the mail window is editable text, and ⌘Z should take back a move.
             CommandGroup(replacing: .undoRedo) {
                 Button(model.undoStack.last.map { "Undo \($0.summary)" } ?? "Undo") { Task { await model.undoLastMove() } }
@@ -70,8 +74,9 @@ struct GmailGTDApp: App {
                     Button("Back to Inbox") { Task { await model.unfileSelected() } }
                         .keyboardShortcut("0", modifiers: [])
                     Divider()
-                    Button("Accept Suggestion") { Task { await model.acceptSuggestion() } }
+                    Button("Approve Suggestion") { Task { await model.acceptSuggestion() } }
                         .keyboardShortcut("a", modifiers: [])
+                        .disabled(model.approvalBucket == nil || model.showingCategorisationSettings)
                     Button("Done") { Task { await model.finishSelected() } }
                         .keyboardShortcut("e", modifiers: [])
                         .disabled(!model.canFinish)
@@ -80,7 +85,7 @@ struct GmailGTDApp: App {
                     Button("Open in Gmail") { model.openSelectedInGmail() }
                         .keyboardShortcut("o", modifiers: [])
                 }
-                .disabled(model.detail == nil)
+                .disabled(model.detail == nil || model.showingCategorisationSettings)
                 Divider()
                 Button("Keyboard Shortcuts") { model.shortcutsPinned.toggle() }
                     .keyboardShortcut("/", modifiers: .command)

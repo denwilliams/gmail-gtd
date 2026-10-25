@@ -1,8 +1,8 @@
 # gmail-gtd
 
 A native macOS Gmail client built around Getting Things Done. Google Workspace only.
-Triage suggestions and summaries run on-device with Apple Foundation Models, so no mail
-content goes to a cloud model.
+Triage suggestions and summaries run on-device with Apple Foundation Models by default.
+Optional Jev categorisation sends email text to TypeSafe only after explicit opt-in.
 
 - `GmailGTD`: SwiftUI app: a Today dashboard, a three-pane inbox/bucket view, a Projects section, AI suggestions, and Open in Gmail on every thread
 - `gtd`: CLI sharing the same core, including an interactive `gtd process`
@@ -68,6 +68,52 @@ swift run gtd process                               # walk the inbox
 ```
 
 `GMAIL_GTD_CLIENT_ID` / `GMAIL_GTD_CLIENT_SECRET` also work.
+
+## Optional Jev and custom categorisation prompts
+
+Open **Categorisation Settings…** (⌘, or the toolbar). Local-only remains the default.
+You can edit and independently reset the local and Jev classification prompts. Saving a changed
+local prompt invalidates cached classifications; summary and project-planning prompts are unchanged.
+
+To use Jev, enter a TypeSafe API token and explicitly enable the toggle. The token is stored in a
+separate Keychain item, never UserDefaults. Clear the token field and save to delete it. Disabling
+Jev stops new provider calls; an already-sent request cannot be recalled and its result is discarded.
+Sign-out clears in-memory results but retains provider settings/token, like the saved OAuth client
+configuration. Turning Jev off restores local-only approval immediately.
+
+**Privacy/cost:** when enabled, on-screen threads in Inbox, Next Action and Waiting For are sent
+automatically to TypeSafe, including sender, subject and message text (not attachments). API charges
+may apply. Demo mode follows the same opt-in using fictional mail. Nothing is filed automatically.
+The detail pane identifies both sources; **Approve** (also **A**) uses Jev whenever enabled, including
+when the local model is unavailable. If Jev is pending, fails, lacks a token or returns an invalid
+category, approval stays disabled—there is no silent local fallback. Use Retry/Regenerate, fix Settings,
+disable Jev, or choose a bucket manually. The CLI's `suggest` and `process` share these settings and policy;
+configure the token/prompts in the app. Summaries, digests and project plans remain on-device.
+
+Integration uses [TypeSafe System One](https://docs.typesafe.ai/introduction/quickstart),
+a Bearer-authenticated `POST https://api.typesafe.ai/v1/systemone` with a single typed Choice question
+and the pinned model `jev-1.14.0`. It returns a GTD category, not generated summaries/actions.
+The [documented standard limits](https://docs.typesafe.ai/models) are 64k tokens per request and
+32k per question (email state + instructions + criteria). No experimental long-context header is used.
+Local prompts allow 2,000 UTF-8 bytes alongside the existing 6,000-character thread budget; Jev
+prompts allow 24,000 UTF-8 bytes with a **30,000-byte complete JSON request cap**. This deliberately
+conservative byte budget avoids assuming a tokenizer ratio; it is not a claim to use the full provider
+window. Jev keeps newest email first and trims older content to the remaining budget. Over-limit/empty
+prompts are rejected with an error, never silently truncated. HTTP errors expose only status/actionable
+advice, not provider response bodies that might contain mail or credentials.
+
+### Verification
+
+On macOS 26 with Xcode/Swift 6:
+
+```sh
+swift build
+swift test
+```
+
+The PR test workflow runs both on a macOS 26 runner. Jev tests inject mocked HTTP transport and never
+need a token or send real email. A live smoke test is optional: opt in with your own token and sample
+mail, verify both categories, press Approve, then disable Jev and verify local-only approval.
 
 ## Notes
 

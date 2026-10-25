@@ -15,7 +15,7 @@ gtd: Gmail GTD from the terminal (add --demo for sample mail, no sign-in)
   gtd file <thread-id> <bucket>                    File into a bucket (archives from inbox)
   gtd done <thread-id>                             Mark a thread Done (moves it to GTD/Done)
   gtd unfile <thread-id>                           Return to inbox
-  gtd suggest <thread-id>                          On-device triage suggestion
+  gtd suggest <thread-id>                          Local + optional Jev triage suggestions
   gtd process [N]                                  Walk the inbox interactively
 
 Buckets: next, waiting, someday, reference, project, noise, done
@@ -79,6 +79,19 @@ func printSuggestion(_ s: TriageSuggestion) {
     if !s.nextAction.isEmpty { print("Next:      \(s.nextAction)") }
     if let w = s.waitingOn { print("Waiting:   \(w)") }
     print("Summary:   \(s.summary)")
+}
+
+func categorise(_ thread: GmailThread, me: String?) async -> (CategorisationOutput, CategorisationSettings) {
+    let settings = CategorisationSettings.load()
+    let output = await Categoriser().evaluate(thread, me: me, settings: settings,
+                                             token: settings.jevEnabled ? JevTokenStore.load() : nil)
+    if let local = output.local { print("Local model:"); printSuggestion(local) }
+    if let error = output.localError { print("Local model: \(error)") }
+    if settings.jevEnabled {
+        if let bucket = output.jev?.bucket { print("Jev: \(bucket.title) (used for approval)") }
+        else if case .failure(let message) = output.jev { print("Jev: \(message) Approval unavailable; choose a bucket manually.") }
+    }
+    return (output, settings)
 }
 
 func run() async throws {
@@ -168,7 +181,7 @@ func run() async throws {
         guard let id = args.first else { fail(usage) }
         let client = try connect().0
         let thread = try await client.thread(id, full: true)
-        printSuggestion(try await Triager().suggest(for: thread, me: try? await client.emailAddress()))
+        _ = await categorise(thread, me: try? await client.emailAddress())
     case "process":
         try await process(limit: args.first.flatMap(Int.init) ?? 20)
     default:
@@ -180,7 +193,6 @@ func run() async throws {
 func process(limit: Int) async throws {
     let (client, labels) = try connect()
     let refs = try await client.listThreads(labelIDs: ["INBOX"], max: limit)
-    let triager = Triager()
     let myEmail = try? await client.emailAddress()
     for ref in refs {
         let thread = try await client.thread(ref.id, full: true)
@@ -188,16 +200,15 @@ func process(limit: Int) async throws {
         if let m = thread.messages?.last {
             print("\(m.from)\n\(m.subject)\n\n\(m.plainText.prefix(600))")
         }
-        var suggestion: TriageSuggestion?
-        do { suggestion = try await triager.suggest(for: thread, me: myEmail); print(); printSuggestion(suggestion!) }
-        catch { print("\n(no suggestion: \(error.localizedDescription))") }
+        let (output, settings) = await categorise(thread, me: myEmail)
+        let approved = ApprovalPolicy.bucket(jevEnabled: settings.jevEnabled, local: output.local, jev: output.jev)
 
         while true {
             print("\n[1]next [2]waiting [3]someday [4]ref [5]project [a]ccept [k]eep [q]uit > ", terminator: "")
             guard let input = readLine()?.trimmingCharacters(in: .whitespaces).lowercased() else { return }
             if input == "q" { return }
             if input == "k" || input.isEmpty { break }
-            let bucket: GTDBucket? = input == "a" ? suggestion?.bucket
+            let bucket: GTDBucket? = input == "a" ? approved
                 : GTDBucket.allCases.first { String($0.shortcut) == input }
             if let bucket { try await labels.file(thread: thread.id, into: bucket); print("→ \(bucket.title)"); break }
         }

@@ -78,7 +78,35 @@ final class AppModel {
     var detailTab: DetailTab = .original
     private var tabChosenByUser = false
     var aiNote: String?   // Why the on-device model produced nothing, shown inline rather than as an error.
-    var suggestion: TriageSuggestion? { selection.flatMap { store.suggestion(for: $0) } }
+    var categorisationSettings = CategorisationSettings.load()
+    var showingCategorisationSettings = false
+    private var categorisationGeneration = UUID()
+    private var localFailures: [String: String] = [:]
+    private var jevResults: [String: JevState] = [:]
+    var suggestion: TriageSuggestion? { selection.flatMap { localSuggestion(for: $0) } }
+    var jevState: JevState? { selection.flatMap { jevResults[$0] } }
+    var approvalBucket: GTDBucket? {
+        ApprovalPolicy.bucket(jevEnabled: categorisationSettings.jevEnabled, local: suggestion, jev: jevState)
+    }
+
+    func localSuggestion(for id: String) -> TriageSuggestion? {
+        store.suggestion(for: id, prompt: categorisationSettings.localPrompt)
+    }
+
+    func saveCategorisationSettings(_ settings: CategorisationSettings, token: String) throws {
+        try settings.validate()
+        try JevTokenStore.save(token)
+        try settings.save()
+        categorisationSettings = settings
+        invalidateCategorisation()
+        scheduleEnqueue()
+    }
+
+    private func invalidateCategorisation() {
+        categorisationGeneration = UUID()
+        jevResults = [:]
+        localFailures = [:]
+    }
     var loading = false
     var error: String?
 
@@ -173,6 +201,9 @@ final class AppModel {
 
     func signOut() {
         if !demo { TokenStore.clear() }
+        pending = []
+        enqueueTask?.cancel()
+        invalidateCategorisation()
         demo = false; notice = nil
         undoStack = []; undoToast = nil; quietRefreshTask?.cancel()
         store.clear(); store = SummaryStore()   // Summaries are private: sign-out deletes them.
@@ -191,6 +222,7 @@ final class AppModel {
     }
 
     private func connect(using base: any MailService, persist: Bool) async {
+        invalidateCategorisation()
         // Every read goes through the cache, so a thread is fetched once however many views want it.
         let client = CachedMailService(base)
         // Demo mail stays in memory so it resets on relaunch; a real mailbox keeps its summaries on disk.
@@ -283,7 +315,12 @@ final class AppModel {
 
     /// Remembers a fetched thread's list header and checks any cached summary against its messages.
     private func note(_ thread: GmailThread) {
+        let previous = store.entriesContentKey(for: thread.id)
         store.note(thread, header: Self.header(of: thread))
+        if previous != SummaryStore.contentKeyForCategorisation(thread) {
+            jevResults[thread.id] = nil
+            localFailures[thread.id] = nil
+        }
     }
 
     private static func header(of thread: GmailThread) -> CachedHeader? {
@@ -316,7 +353,7 @@ final class AppModel {
         guard let client, let id = selection else { detail = nil; return }
         // Show the summary straight away if there is one; otherwise the original until it is ready.
         tabChosenByUser = false
-        detailTab = store.suggestion(for: id) != nil ? .summary : .original
+        detailTab = localSuggestion(for: id) != nil ? .summary : .original
         do {
             let thread = try await client.thread(id, full: true)
             guard selection == id else { return }   // The user has already moved on.
@@ -324,7 +361,8 @@ final class AppModel {
             store.touch(id)
             detail = thread
             apply(thread, id: id)
-            if store.suggestion(for: id) != nil, !tabChosenByUser { detailTab = .summary }   // note() may have dropped a stale one
+            if localSuggestion(for: id) != nil, !tabChosenByUser { detailTab = .summary }   // note() may have dropped a stale one
+            aiNote = localFailures[id]
             if aiFolder && !isDone(id) { prioritize(id) }
         } catch { if selection == id { self.error = error.localizedDescription } }
     }
@@ -354,8 +392,8 @@ final class AppModel {
     }
 
     func acceptSuggestion() async {
-        guard let s = suggestion else { return }
-        await fileSelected(into: s.bucket)
+        guard let bucket = approvalBucket else { return }
+        await fileSelected(into: bucket)
     }
 
     /// Refresh, and retry the connection if it never came up (for example, the Gmail API was off).
@@ -390,7 +428,9 @@ final class AppModel {
     }
 
     private func isDone(_ id: String) -> Bool {
-        folder == .bucket(.project) ? store.plan(for: id) != nil : store.suggestion(for: id) != nil
+        if folder == .bucket(.project) { return store.plan(for: id) != nil }
+        let localDone = localSuggestion(for: id) != nil || localFailures[id] != nil
+        return localDone && (!categorisationSettings.jevEnabled || jevResults[id]?.isFinished == true)
     }
 
     /// Rows currently on screen, reported by the list as they scroll in and out.
@@ -462,19 +502,28 @@ final class AppModel {
             inflight.insert(id)
             await process(id, using: client)
             inflight.remove(id)
+            // Settings may have changed while this ID was excluded as in-flight.
+            enqueueVisible()
         }
     }
 
     private func process(_ id: String, using client: any MailService) async {
         let projects = folder == .bucket(.project)
+        let generation = categorisationGeneration
         do {
             let thread = try await client.thread(id, full: true)
+            guard generation == categorisationGeneration, signedIn else { return }
             note(thread)
             if projects { store.setPlan(try await triager.plan(for: thread), for: thread) }
             else {
-                store.setSuggestion(try await triager.suggest(for: thread, me: email), for: thread)
-                // The summary is ready: switch to it, unless the user chose a tab themselves.
-                if id == selection && !tabChosenByUser { detailTab = .summary }
+                let settings = categorisationSettings
+                let key = SummaryStore.contentKeyForCategorisation(thread)
+                if settings.jevEnabled { jevResults[id] = .pending }
+                await Categoriser().run(thread, me: email, settings: settings,
+                                        token: settings.jevEnabled ? JevTokenStore.load() : nil) { [weak self] event in
+                    await self?.receive(event, for: thread, settings: settings, generation: generation, key: key)
+                }
+                if generation != categorisationGeneration { scheduleEnqueue() }
             }
         } catch let unavailable as TriageError {
             pending.removeAll()   // The model isn't there; don't retry it for every row.
@@ -485,10 +534,30 @@ final class AppModel {
         }
     }
 
+    private func receive(_ event: CategorisationEvent, for thread: GmailThread,
+                         settings: CategorisationSettings, generation: UUID, key: String) {
+        // Sign-out, settings edits, or a newer reply invalidate an in-flight result.
+        guard generation == categorisationGeneration,
+              store.entriesContentKey(for: thread.id) == key else { return }
+        switch event {
+        case .local(let suggestion):
+            store.setSuggestion(suggestion, for: thread, prompt: settings.localPrompt)
+            localFailures[thread.id] = nil
+            if thread.id == selection && !tabChosenByUser { detailTab = .summary }
+        case .localFailure(let message):
+            localFailures[thread.id] = message
+            if thread.id == selection { aiNote = message }
+        case .jev(let bucket): jevResults[thread.id] = .success(bucket)
+        case .jevFailure(let message): jevResults[thread.id] = .failure(message)
+        }
+    }
+
     /// Re-runs the model for the open thread, ignoring any cached result.
     func regenerateSelected() {
         guard let id = selection else { return }
         if folder == .bucket(.project) { store.clearPlan(for: id) } else { store.clearSuggestion(for: id) }
+        jevResults[id] = nil
+        localFailures[id] = nil
         aiNote = nil
         tabChosenByUser = false
         detailTab = .original   // Back to the original while the new summary is made.

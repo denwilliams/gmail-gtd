@@ -1,0 +1,16 @@
+name: Categorisation tests
+on:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: macos-26
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build all products
+        run: swift build
+      - name: Run tests (mocked Jev, no credentials or Apple Intelligence needed)
+        run: swift test

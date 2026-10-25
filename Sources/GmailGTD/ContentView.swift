@@ -5,7 +5,13 @@ struct ContentView: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
-        if model.signedIn { MailView() } else { SignInView() }
+        Group {
+            if model.signedIn { MailView() } else { SignInView() }
+        }
+        .sheet(isPresented: Binding(get: { model.showingCategorisationSettings },
+                                    set: { model.showingCategorisationSettings = $0 })) {
+            CategorisationSettingsView().environment(model)
+        }
     }
 }
 
@@ -93,6 +99,7 @@ struct MailView: View {
         }
         .toolbar {
             ToolbarItem { Button("Refresh", systemImage: "arrow.clockwise") { Task { await model.refresh() } } }
+            ToolbarItem { Button("Categorisation Settings", systemImage: "slider.horizontal.3") { model.showingCategorisationSettings = true } }
             ToolbarItem { Button("Sign Out") { model.signOut() } }
         }
     }
@@ -193,7 +200,7 @@ struct RowView: View {
     let row: ThreadRow
 
     var body: some View {
-        let suggestion = model.store.suggestion(for: row.id)
+        let suggestion = model.localSuggestion(for: row.id)
         VStack(alignment: .leading, spacing: 2) {
             HStack {
                 Text(row.loaded ? row.from.displayName : "Sender name")
@@ -380,22 +387,36 @@ struct TriageBar: View {
                 Text(note).font(.caption).foregroundStyle(.secondary)
             }
             if let s = model.suggestion {
-                HStack(alignment: .top) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Suggested: \(s.bucket.title)").font(.headline).foregroundStyle(s.bucket.color)
-                        if !s.nextAction.isEmpty { Text("Next: \(s.nextAction)").foregroundStyle(.secondary).lineLimit(1) }
-                    }
-                    Spacer()
-                    Button("Accept") { Task { await model.fileSelected(into: s.bucket) } }
-                        .buttonStyle(.borderedProminent).tint(s.bucket.color)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Local model: \(s.bucket.title)").font(.headline).foregroundStyle(s.bucket.color)
+                    if !s.nextAction.isEmpty { Text("Next: \(s.nextAction)").foregroundStyle(.secondary).lineLimit(1) }
                 }
+            }
+            if model.categorisationSettings.jevEnabled {
+                switch model.jevState {
+                case .success(let bucket):
+                    Text("Jev: \(bucket.title)").font(.headline).foregroundStyle(bucket.color)
+                case .failure(let message):
+                    Text("Jev: \(message)").font(.caption).foregroundStyle(.red)
+                    Button("Retry categorisation") { model.regenerateSelected() }.disabled(model.suggesting)
+                case .pending, nil:
+                    HStack { ProgressView().controlSize(.small); Text("Jev: awaiting categorisation…") }
+                }
+            }
+            HStack {
+                Text(model.categorisationSettings.jevEnabled ? "Approve uses Jev. Manual filing is always available." : "Approve uses the local model.")
+                    .font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Button("Approve") { Task { await model.acceptSuggestion() } }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(model.approvalBucket == nil)
             }
         }
         .padding(10)
     }
 }
 
-/// The on-device summary of the open thread.
+/// The on-device summary of the open thread (Jev returns a category, not generated prose).
 struct SummaryView: View {
     @Environment(AppModel.self) private var model
     let thread: GmailThread
@@ -409,8 +430,15 @@ struct SummaryView: View {
                     if !s.details.isEmpty { Text(s.details).font(.body).lineSpacing(3) }
                     if !s.nextAction.isEmpty { Label("Next: \(s.nextAction)", systemImage: "arrow.right.circle") }
                     if let w = s.waitingOn { Label("Waiting on \(w)", systemImage: "hourglass") }
-                    Label("Suggested: \(s.bucket.title)", systemImage: Folder.bucket(s.bucket).symbol)
+                    Label("Local model: \(s.bucket.title)", systemImage: Folder.bucket(s.bucket).symbol)
                         .foregroundStyle(s.bucket.color)
+                    if model.categorisationSettings.jevEnabled {
+                        switch model.jevState {
+                        case .success(let bucket): Text("Jev: \(bucket.title)").foregroundStyle(bucket.color)
+                        case .failure(let message): Text("Jev: \(message)").foregroundStyle(.secondary)
+                        case .pending, nil: Text("Jev: awaiting categorisation…").foregroundStyle(.secondary)
+                        }
+                    }
                     Text(participants).font(.caption).foregroundStyle(.secondary)
                 }
                 .padding()
