@@ -22,8 +22,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         NSApp.setActivationPolicy(.regular)
         NSApp.applicationIconImage = AppIcon.image   // the Dock icon when there is no app bundle
-        NSApp.activate(ignoringOtherApps: true)
+        NSApp.activate()
+
+        // Since macOS 14 an app started by a script can't make itself active, and SwiftUI doesn't put its window
+        // on screen until it is, so the app sat in the background with only a menu bar. Ordering the window to the
+        // front doesn't need activation. (Launching from Finder or the Dock activates normally; this is harmless there.)
+        Task { @MainActor in
+            for attempt in 1...40 {
+                try? await Task.sleep(for: .milliseconds(250))
+                let windows = NSApp.windows.filter { $0.canBecomeMain }
+                if windows.isEmpty && attempt == 6 {   // still nothing after 1.5s: ask SwiftUI for one
+                    NSApp.sendAction(#selector(NSResponder.newWindowForTab(_:)), to: nil, from: nil)
+                }
+                for window in windows where !window.isVisible { window.orderFrontRegardless() }
+                if !windows.isEmpty && windows.allSatisfy(\.isVisible) { break }
+            }
+        }
     }
+
+    /// Clicking the Dock icon with no window open brings one back.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool { true }
 }
 
 @main
@@ -32,7 +50,9 @@ struct GmailGTDApp: App {
     @State private var model = AppModel()
 
     var body: some Scene {
-        WindowGroup("Gmail GTD") {
+        // One window: every view shares one model, so extra windows would only duplicate it. Unlike a WindowGroup,
+        // a Window scene is opened at launch every time, even when the app is started by a script.
+        Window("Gmail GTD", id: "main") {
             ContentView()
                 .environment(model)
                 .frame(minWidth: 1000, minHeight: 560)
