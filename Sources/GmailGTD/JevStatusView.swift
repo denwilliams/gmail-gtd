@@ -7,6 +7,7 @@ struct JevStatusPresentation {
     let bucket: GTDBucket?
     let pending: Bool
     let failed: Bool
+    var symbol: String? { bucket.map { Folder.bucket($0).symbol } }
 
     init(state: JevState?) {
         switch state {
@@ -29,7 +30,14 @@ struct JevStatusView: View {
             VStack(alignment: .leading, spacing: 6) {
                 HStack {
                     if status.pending { ProgressView().controlSize(.small) }
-                    Text(status.text).foregroundStyle(status.bucket?.color ?? (status.failed ? .red : .secondary))
+                    Group {
+                        if let symbol = status.symbol {
+                            Label(status.text, systemImage: symbol)
+                        } else {
+                            Text(status.text)
+                        }
+                    }
+                    .foregroundStyle(status.bucket?.color ?? (status.failed ? .red : .secondary))
                     if status.failed {
                         Button("Retry categorisation") { model.regenerateSelected() }.disabled(model.suggesting)
                     }
@@ -39,17 +47,30 @@ struct JevStatusView: View {
     }
 }
 
+/// A successful Jev decision leads; keep local-only/pending/failure presentation unchanged.
+struct ClassificationResultsPresentation {
+    let jevFirst: Bool
+    let localBucket: GTDBucket?
+
+    init(localBucket: GTDBucket?, jev: JevStatusPresentation?) {
+        jevFirst = jev?.bucket != nil
+        self.localBucket = localBucket == jev?.bucket ? nil : localBucket
+    }
+}
+
 /// Both sources share a horizontal row; narrow panes may wrap rather than truncate labels.
 struct ClassificationResultsView: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
+        let presentation = ClassificationResultsPresentation(localBucket: model.suggestion?.bucket, jev: model.jevStatus)
         ClassificationResultsRow {
-            if let suggestion = model.suggestion {
-                Label("Local model: \(suggestion.bucket.title)", systemImage: Folder.bucket(suggestion.bucket).symbol)
-                    .foregroundStyle(suggestion.bucket.color)
+            if presentation.jevFirst { JevStatusView() }
+            if let bucket = presentation.localBucket {
+                Label("Local model: \(bucket.title)", systemImage: Folder.bucket(bucket).symbol)
+                    .foregroundStyle(bucket.color)
             }
-            JevStatusView()
+            if !presentation.jevFirst { JevStatusView() }
         }
     }
 }
