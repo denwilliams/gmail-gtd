@@ -10,6 +10,10 @@ private actor DeNoiseMail: MailService {
     let base = DemoMailService()
     private var failNext: Set<String> = []
     private(set) var writes: [String] = []
+    private var holdListing = false
+    private(set) var listingHeld = false
+    func pauseListing() { holdListing = true }
+    func releaseListing() { holdListing = false }
 
     func prepare() async throws {
         let labels = LabelManager(client: base)
@@ -19,7 +23,13 @@ private actor DeNoiseMail: MailService {
     }
     func fail(_ id: String) { failNext.insert(id) }
     func listThreadPage(labelIDs: [String], query: String?, max: Int, pageToken: String?) async throws -> ThreadPage {
-        try await base.listThreadPage(labelIDs: labelIDs, query: query, max: max, pageToken: pageToken)
+        if holdListing {
+            listingHeld = true
+            let deadline = ContinuousClock.now.advanced(by: .seconds(4))
+            while holdListing && ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
+            listingHeld = false
+        }
+        return try await base.listThreadPage(labelIDs: labelIDs, query: query, max: max, pageToken: pageToken)
     }
     func thread(_ id: String, full: Bool) async throws -> GmailThread { try await base.thread(id, full: full) }
     func labels() async throws -> [GmailLabel] { try await base.labels() }
@@ -143,8 +153,11 @@ func deNoiseEligibilityFollowsJevApprovalNotLocalDisplayFallback(result: GTDBuck
 func deNoiseCorrectionsShrinkAndLGTMFilesOnlyRemainingSnapshot(bucket: GTDBucket) async throws {
     let (model, mail) = try await deNoiseFixture()
     defer { model.signOut() }
+    let all = model.rows
+    model.rows = Array(all.prefix(10))
     model.startDeNoiseMode()
     let batch = try #require(model.deNoiseBatch)
+    model.rows += all.dropFirst(10)   // Newly loaded eligible rows must not join this review.
     let corrected = batch.rows[0]
     let outsiders = model.rows.filter { row in !batch.rows.contains { $0.id == row.id } }
     model.beginDeNoiseCorrection(for: outsiders[0].id)
@@ -261,6 +274,24 @@ func deNoiseContextChangesInvalidateStaleActions(change: String) async throws {
     #expect(model.deNoiseCorrection == nil)
     model.confirmDeNoiseCorrection(.reference, correctionID: correction.id)
     model.approveDeNoiseBatch(batch.id)
+    #expect(await mail.writes.isEmpty)
+}
+
+@Test @MainActor func deNoiseInFlightQuietRefreshCannotReplaceReviewedInbox() async throws {
+    let (model, mail) = try await deNoiseFixture()
+    defer { model.signOut() }
+    model.rows = Array(model.rows.prefix(16))   // Within the quiet-refresh paging threshold.
+    let before = model.rows
+    await mail.pauseListing()
+    let refresh = Task { await model.refreshQuietly() }
+    try await deNoiseEventually { await mail.listingHeld }
+    model.startDeNoiseMode()
+    let batch = try #require(model.deNoiseBatch)
+    await mail.releaseListing()
+    await refresh.value
+    #expect(model.rows == before)
+    #expect(model.deNoiseBatch?.rows == batch.rows)
+    #expect(model.canApproveDeNoiseBatch)
     #expect(await mail.writes.isEmpty)
 }
 

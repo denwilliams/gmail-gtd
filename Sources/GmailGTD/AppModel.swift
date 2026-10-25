@@ -913,7 +913,8 @@ final class AppModel {
         let openFolder = folder
         do {
             let page = try await fetchPage(labelID: labelID(for: openFolder), max: pageSize, hydrate: false, pageToken: nil)
-            guard folder == openFolder else { return }
+            // A review may have started while the list request was in flight.
+            guard folder == openFolder, deNoiseBatch == nil else { return }
             let old = Dictionary(rows.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
             // Keep rows we already have headers for, so nothing flashes back to a placeholder.
             rows = page.rows.map { new in old[new.id].flatMap { $0.loaded ? $0 : nil } ?? new }
