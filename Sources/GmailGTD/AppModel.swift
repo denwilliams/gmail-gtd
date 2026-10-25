@@ -5,6 +5,7 @@ import GTDCore
 enum Folder: Hashable, Identifiable {
     case today
     case inbox
+    case corrections
     case bucket(GTDBucket)
 
     var id: Self { self }
@@ -12,6 +13,7 @@ enum Folder: Hashable, Identifiable {
         switch self {
         case .today: "Today"
         case .inbox: "Inbox"
+        case .corrections: "Corrections"
         case .bucket(let b): b.title
         }
     }
@@ -19,6 +21,7 @@ enum Folder: Hashable, Identifiable {
         switch self {
         case .today: "sun.max"
         case .inbox: "tray"
+        case .corrections: "arrow.triangle.branch"
         case .bucket(.nextAction): "bolt"
         case .bucket(.waitingFor): "hourglass"
         case .bucket(.someday): "moon.zzz"
@@ -38,7 +41,7 @@ enum TodayList { case nextActions, waiting }
 /// A move, with what is needed to take it back: the thread's inbox and GTD labels before, and the list row
 /// that was taken off the screen (and where it sat), so undo can put it back at once.
 struct UndoMove: Identifiable {
-    let id = UUID()
+    let id: UUID
     let threadID: String
     let subject: String
     /// Resolves after earlier moves finish, before this move changes any labels. Undo can be clicked meanwhile.
@@ -50,6 +53,8 @@ struct UndoMove: Identifiable {
     let row: ThreadRow?
     let index: Int?
     let todayList: TodayList?
+    /// The originating mailbox store, even if the user signs out before Gmail completes the move.
+    let correctionStore: CorrectionStore
 }
 
 struct ThreadRow: Identifiable, Hashable {
@@ -76,6 +81,7 @@ final class AppModel {
     var detail: GmailThread?
     /// Summaries, plans and list headers for recent threads (LRU, kept between launches for a real mailbox).
     var store = SummaryStore()
+    private(set) var corrections = CorrectionStore()
     var detailTab: DetailTab = .original
     private var tabChosenByUser = false
     var aiNote: String?   // Why the on-device model produced nothing, shown inline rather than as an error.
@@ -279,7 +285,7 @@ final class AppModel {
         // Remove only this member, before using the existing optimistic filing and undo pipeline.
         deNoiseBatch?.rows.removeAll { $0.id == correction.row.id }
         deNoiseCorrection = nil
-        move(correction.row.id, to: .bucket(bucket), summary: "Moved to \(bucket.title)")
+        move(correction.row.id, to: .bucket(bucket), summary: "Moved to \(bucket.title)", manualChoice: true)
     }
 
     func approveDeNoiseBatch(_ batchID: UUID) {
@@ -336,6 +342,7 @@ final class AppModel {
         planningUnavailable = nil
         demo = false; notice = nil
         undoStack = []; undoToast = nil; quietRefreshTask?.cancel()
+        corrections = CorrectionStore() // Hide history, but retain it on disk for this mailbox.
         store.clear(); store = SummaryStore()   // Summaries are private: sign-out deletes them.
         signedIn = false; client = nil; cache = nil; labels = nil; email = nil
         rows = []; detail = nil; selection = nil; nextActions = []; waiting = []; digest = nil
@@ -353,6 +360,8 @@ final class AppModel {
 
     // Internal for app-level tests against in-memory mail and injected model/provider implementations.
     func connect(using base: any MailService, persist: Bool) async {
+        // Finish prior writes before reopening the same mailbox history into a new store instance.
+        await moveChain?.value
         invalidateCategorisation()
         planningUnavailable = nil
         // Every read goes through the cache, so a thread is fetched once however many views want it.
@@ -364,6 +373,10 @@ final class AppModel {
             labelIDs = try await labels.ensureLabels()
             self.client = client; self.cache = client; self.labels = labels
             email = try? await client.emailAddress()
+            corrections = CorrectionStore(fileURL: persist ? email.flatMap { CorrectionStore.fileURL(for: $0) } : nil)
+            if persist && email == nil {
+                notice = "Mailbox identity unavailable: corrections will only be kept for this session."
+            }
             await folderChanged()
         } catch { self.error = error.localizedDescription }
     }
@@ -375,6 +388,7 @@ final class AppModel {
         visible = []
         jevPending = []
         nextPageToken = nil
+        if folder == .corrections { detail = nil; return }
         if folder == .today { await loadToday() } else { await reload() }
     }
 
@@ -382,7 +396,7 @@ final class AppModel {
 
     func reload() async {
         endDeNoiseMode()
-        guard client != nil else { return }
+        guard folder != .corrections, client != nil else { return }
         loading = true; defer { loading = false }
         do {
             let page = try await fetchPage(labelID: labelID(for: folder), max: pageSize, hydrate: false, pageToken: nil)
@@ -403,6 +417,7 @@ final class AppModel {
     private func labelID(for folder: Folder) -> String {
         switch folder {
         case .today, .inbox: "INBOX"
+        case .corrections: "" // Local history never maps to a Gmail label.
         case .bucket(let b): labelIDs[b] ?? ""
         }
     }
@@ -531,7 +546,7 @@ final class AppModel {
 
     func acceptSuggestion() async {
         guard let bucket = approvalBucket else { return }
-        await fileSelected(into: bucket)
+        await fileSelected(into: bucket, manualChoice: false)
     }
 
     /// Refresh, and retry the connection if it never came up (for example, the Gmail API was off).
@@ -742,9 +757,9 @@ final class AppModel {
         prioritize(id)
     }
 
-    func fileSelected(into bucket: GTDBucket) async {
-        guard deNoiseBatch == nil, let id = selection, bucket != currentBucket else { return }   // already there
-        move(id, to: .bucket(bucket), summary: "Moved to \(bucket.title)")
+    func fileSelected(into bucket: GTDBucket, manualChoice: Bool = true) async {
+        guard folder != .corrections, deNoiseBatch == nil, let id = selection, bucket != currentBucket else { return }   // already there
+        move(id, to: .bucket(bucket), summary: "Moved to \(bucket.title)", manualChoice: manualChoice)
     }
 
     /// Any filed thread can be marked Done, except one that already is. (Reference is the other way to be
@@ -776,7 +791,7 @@ final class AppModel {
 
     private enum Destination { case bucket(GTDBucket), inbox }
 
-    private func move(_ id: String, to destination: Destination, summary: String) {
+    private func move(_ id: String, to destination: Destination, summary: String, manualChoice: Bool = false) {
         guard let labels, let client else { return }
         // Batch correction removes its member before moving; any other move of a reviewed member
         // invalidates the session rather than silently changing what LGTM will do.
@@ -792,10 +807,21 @@ final class AppModel {
                        nextActions.first { $0.id == id }?.subject,
                        waiting.first { $0.id == id }?.subject]
             .compactMap { $0 }.first { !$0.isEmpty } ?? "(no subject)"
-        let removed = removeLocally(id)
+        let from = [detail?.id == id ? detail?.messages?.last?.from : nil,
+                    rows.first { $0.id == id }?.from, nextActions.first { $0.id == id }?.from,
+                    waiting.first { $0.id == id }?.from].compactMap { $0 }.first { !$0.isEmpty } ?? ""
+        let moveID = UUID()
         let target: GTDBucket? = if case .bucket(let b) = destination { b } else { nil }
-        let move = UndoMove(threadID: id, subject: subject, before: before, summary: summary, destination: target,
-                            origin: folder, row: removed.row, index: removed.index, todayList: removed.list)
+        let correction = manualChoice ? target.flatMap {
+            CorrectionRecord.capture(id: moveID, threadID: id, subject: subject, from: from,
+                                     chosenBucket: $0, jevEnabled: categorisationSettings.jevEnabled,
+                                     localBucket: localSuggestion(for: id)?.bucket, jevBucket: jevResults[id]?.bucket,
+                                     localPrompt: categorisationSettings.localPrompt, jevPrompt: categorisationSettings.jevPrompt)
+        } : nil
+        let removed = removeLocally(id)
+        let move = UndoMove(id: moveID, threadID: id, subject: subject, before: before, summary: summary, destination: target,
+                            origin: folder, row: removed.row, index: removed.index, todayList: removed.list,
+                            correctionStore: corrections)
         remember(move)
         enqueueRemote { [weak self] in
             do {
@@ -804,6 +830,7 @@ final class AppModel {
                 case .bucket(let bucket): try await labels.file(thread: id, into: bucket)
                 case .inbox: try await labels.unfile(thread: id)
                 }
+                if let correction { move.correctionStore.append(correction) }
             } catch { self?.moveFailed(move, error) }
         }
         scheduleQuietRefresh()
@@ -885,9 +912,11 @@ final class AppModel {
             do {
                 let before = try await move.before.value
                 try await labels.restore(thread: move.threadID, to: before)
+                move.correctionStore.remove(id: move.id)
             } catch {
                 self?.error = "Couldn\u{2019}t undo the move of \u{201C}\(move.subject)\u{201D}: \(error.localizedDescription)"
-                await self?.refreshQuietly()
+                // This closure is itself on moveChain; awaiting refresh here would await itself.
+                Task { [weak self] in await self?.refreshQuietly() }
             }
         }
         scheduleQuietRefresh()
@@ -906,7 +935,7 @@ final class AppModel {
     func refreshQuietly() async {
         await moveChain?.value   // let our own changes reach Gmail first
         // Keep the reviewed snapshot stable; explicit Refresh ends the mode and reloads normally.
-        guard deNoiseBatch == nil, client != nil, !loading, !loadingMore else { return }
+        guard folder != .corrections, deNoiseBatch == nil, client != nil, !loading, !loadingMore else { return }
         if folder == .today { await loadToday(); return }
         // If the user has scrolled through several pages, replacing them would jerk the list; leave it alone.
         guard rows.count <= pageSize + 10 else { return }
@@ -958,7 +987,7 @@ final class AppModel {
 
     /// Ticks off a Next Action: clears its GTD label and leaves it archived.
     func finish(_ row: ThreadRow) async {
-        move(row.id, to: .bucket(.done), summary: "Marked done")
+        move(row.id, to: .bucket(.done), summary: "Marked done", manualChoice: true)
     }
 
     // MARK: - Projects

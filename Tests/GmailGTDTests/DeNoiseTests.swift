@@ -182,6 +182,10 @@ func deNoiseCorrectionsShrinkAndLGTMFilesOnlyRemainingSnapshot(bucket: GTDBucket
     #expect(model.undoStack.count == 1)
     await model.refreshQuietly()   // Also waits for the serialized correction to reach the backend.
     #expect(model.deNoiseBatch?.id == batch.id)   // Quiet refresh must not replace reviewed members.
+    #expect(model.corrections.records.count == 1)
+    #expect(model.corrections.records.first?.threadID == corrected.id)
+    #expect(model.corrections.records.first?.localBucket == .noise)
+    #expect(model.corrections.records.first?.chosenBucket == bucket)
     let labels = try await mail.labelSet(corrected.id)
     #expect(labels.contains(DemoMailService.labelID(bucket)))
     #expect(!labels.contains(DemoMailService.labelID(.noise)))
@@ -203,6 +207,7 @@ func deNoiseCorrectionsShrinkAndLGTMFilesOnlyRemainingSnapshot(bucket: GTDBucket
     }
     for row in outsiders { #expect(try await mail.labelSet(row.id) == Set(["INBOX"] + (row.unread ? ["UNREAD"] : []))) }
     #expect(await mail.writes.count == 10)
+    #expect(model.corrections.records.count == 1) // Batch approvals are not manual mismatches.
 
     // LGTM uses the same per-thread undo snapshots, including the original INBOX label.
     let last = try #require(model.undoStack.last)
@@ -250,6 +255,7 @@ func deNoiseCorrectionsShrinkAndLGTMFilesOnlyRemainingSnapshot(bucket: GTDBucket
     #expect(model.rows.contains { $0.id == failed.id })
     #expect(try await mail.labelSet(failed.id).contains("INBOX"))
     #expect(!model.undoStack.contains { $0.threadID == failed.id })
+    #expect(!model.corrections.records.contains { $0.threadID == failed.id })
     #expect(await mail.writes.count == (correction ? 0 : 9))
 }
 
