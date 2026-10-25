@@ -29,10 +29,11 @@ final class ApprovalShortcutView: NSView {
         stopMonitoring()
         guard window != nil else { return }
         monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            MainActor.assumeIsolated { () -> NSEvent? in
-                guard let self else { return event }
-                return self.handle(event)
+            let consumed = MainActor.assumeIsolated {
+                guard let self else { return false }
+                return self.handle(event) == nil
             }
+            return consumed ? nil : event
         }
     }
 
