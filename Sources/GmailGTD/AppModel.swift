@@ -99,6 +99,7 @@ final class AppModel {
         didSet { if showingCategorisationSettings { endDeNoiseMode() } }
     }
     private var categorisationGeneration = UUID()
+    private var mailboxGeneration = UUID()
     private var localFailures: [String: String] = [:]
     private var jevResults: [String: JevState] = [:]
     private var jevKeys: [String: JevClassificationKey] = [:]
@@ -377,6 +378,7 @@ final class AppModel {
     }
 
     func signOut() {
+        mailboxGeneration = UUID()
         if !demo { TokenStore.clear() }
         pending = []
         enqueueTask?.cancel()
@@ -406,6 +408,7 @@ final class AppModel {
     func connect(using base: any MailService, persist: Bool, cacheDirectory: URL? = nil) async {
         // Finish prior writes before reopening the same mailbox history into a new store instance.
         await moveChain?.value
+        mailboxGeneration = UUID()
         invalidateCategorisation()
         let generation = categorisationGeneration
         pending = []; enqueueTask?.cancel()
@@ -416,10 +419,11 @@ final class AppModel {
         let client = CachedMailService(base)
         do {
             let labels = LabelManager(client: client)
-            labelIDs = try await labels.ensureLabels()
+            let ids = try await labels.ensureLabels()
             let mailbox = try? await client.emailAddress().trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
             guard generation == categorisationGeneration, signedIn else { return }
             self.client = client; self.cache = client; self.labels = labels
+            labelIDs = ids
             email = mailbox.flatMap { $0.isEmpty ? nil : $0 }
             // Tests may route all persistent caches to a temporary directory; demo remains memory-only.
             let summaryURL = cacheDirectory?.appending(path: "summaries.json") ?? SummaryStore.defaultFileURL
@@ -513,12 +517,14 @@ final class AppModel {
     /// Fetches a few threads at a time. Gmail bills per request, and the cache makes repeats free.
     private func fetchThreads(_ ids: [String]) async -> [String: GmailThread] {
         guard let client else { return [:] }
+        let generation = mailboxGeneration
         var result: [String: GmailThread] = [:]
         for start in stride(from: 0, to: ids.count, by: 4) {
             let chunk = ids[start..<min(start + 4, ids.count)]
             await withTaskGroup(of: (String, GmailThread?).self) { group in
                 for id in chunk { group.addTask { (id, try? await client.thread(id)) } }
                 for await (id, thread) in group {
+                    guard generation == mailboxGeneration else { continue }
                     if let thread { result[id] = thread; note(thread) } else { failed.insert(id) }
                 }
             }
@@ -579,12 +585,13 @@ final class AppModel {
         scheduleQuietRefresh()
         aiNote = nil
         guard let client, let id = selection else { detail = nil; return }
+        let generation = mailboxGeneration
         // Show the summary straight away if there is one; otherwise the original until it is ready.
         tabChosenByUser = false
         detailTab = localSuggestion(for: id) != nil ? .summary : .original
         do {
             let thread = try await client.thread(id, full: true)
-            guard selection == id else { return }   // The user has already moved on.
+            guard generation == mailboxGeneration, selection == id else { return }   // The user/session has moved on.
             note(thread)
             store.touch(id)
             detail = thread
@@ -592,7 +599,7 @@ final class AppModel {
             if localSuggestion(for: id) != nil, !tabChosenByUser { detailTab = .summary }   // note() may have dropped a stale one
             aiNote = folder == .bucket(.project) ? planningUnavailable : localFailures[id]
             if aiFolder && !isDone(id) { prioritize(id) }
-        } catch { if selection == id { self.error = error.localizedDescription } }
+        } catch { if generation == mailboxGeneration, selection == id { self.error = error.localizedDescription } }
     }
 
     // MARK: - Shortcut overlay
@@ -815,6 +822,7 @@ final class AppModel {
             pending.removeAll()
             aiNote = unavailable.localizedDescription
         } catch {
+            guard generation == categorisationGeneration, signedIn else { return }
             failed.insert(id)   // Skip this thread from now on; carry on with the rest.
             if id == selection { aiNote = error.localizedDescription }
         }

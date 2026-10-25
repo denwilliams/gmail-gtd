@@ -12,7 +12,13 @@ private actor NavigationMailbox: MailService {
     private let account: String
     private var reply = false
     private var revision = 1
-    init(account: String = DemoMailService.account) { self.account = account }
+    private var heldReads: Bool
+    private(set) var readsStarted = 0
+    private(set) var readsFinished = 0
+    init(account: String = DemoMailService.account, heldReads: Bool = false) {
+        self.account = account; self.heldReads = heldReads
+    }
+    func releaseReads() { heldReads = false }
     func addReply() { reply = true; revision += 1 }
     func listThreadPage(labelIDs: [String], query: String?, max: Int, pageToken: String?) async throws -> ThreadPage {
         let page = try await base.listThreadPage(labelIDs: labelIDs, query: query, max: 100, pageToken: nil)
@@ -21,7 +27,13 @@ private actor NavigationMailbox: MailService {
         }, nextPageToken: nil)
     }
     func thread(_ id: String, full: Bool) async throws -> GmailThread {
+        readsStarted += 1
         let thread = try await base.thread(id, full: full)
+        let deadline = ContinuousClock.now.advanced(by: .seconds(6))
+        while heldReads && ContinuousClock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        readsFinished += 1
         var messages = thread.messages ?? []
         if reply {
             messages.append(GmailMessage(id: "new-reply", threadId: id, labelIds: messages.last?.labelIds,
@@ -106,12 +118,18 @@ private actor NavigationProvider {
         model.selection == NavigationMailbox.id && model.detail?.id == NavigationMailbox.id && !model.suggesting
     }
     for _ in 0..<3 {
+        model.selection = nil
         model.folder = .inbox
-        try await waitForCacheNavigation { model.selection == NavigationMailbox.id && !model.suggesting }
+        try await waitForCacheNavigation {
+            model.selection == NavigationMailbox.id && model.approvalBucket == .noise && !model.suggesting
+        }
         model.rowAppeared(NavigationMailbox.id)
         model.rowDisappeared(NavigationMailbox.id)
+        model.selection = nil
         model.folder = .bucket(.nextAction)
-        try await waitForCacheNavigation { model.selection == NavigationMailbox.id && !model.suggesting }
+        try await waitForCacheNavigation {
+            model.selection == NavigationMailbox.id && model.approvalBucket == .noise && !model.suggesting
+        }
     }
     #expect(await provider.calls == 1)
     #expect(model.approvalBucket == .noise)
@@ -197,4 +215,26 @@ private actor NavigationProvider {
     await model.connect(using: NavigationMailbox(account: "other@example.test"), persist: true, cacheDirectory: directory)
     try await waitForCacheNavigation { await provider.calls == 2 && model.approvalBucket == .nextAction && !model.suggesting }
     #expect(!FileManager.default.fileExists(atPath: url.path))
+}
+
+@Test @MainActor func oldAccountDetailFetchCannotReplaceNewAccountContentOrClassification() async throws {
+    let provider = NavigationProvider()
+    let oldMailbox = NavigationMailbox(heldReads: true)
+    let newMailbox = NavigationMailbox(account: "other@example.test")
+    await newMailbox.addReply() // Same thread ID, different account and content.
+    let model = cacheNavigationModel(provider)
+    defer { model.demo = true; model.signOut() }
+    await model.connect(using: oldMailbox, persist: false)
+    try await waitForCacheNavigation { await oldMailbox.readsStarted > 0 }
+    model.signOut()
+    model.demo = true; model.signedIn = true
+    await model.connect(using: newMailbox, persist: false)
+    // The single Jev worker can be waiting for the old fetch, but detail loading is independent.
+    try await waitForCacheNavigation { model.detail?.messages?.count == 2 }
+    await oldMailbox.releaseReads()
+    try await waitForCacheNavigation { await oldMailbox.readsFinished > 0 && model.approvalBucket == .nextAction && !model.suggesting }
+    try await Task.sleep(for: .milliseconds(100))
+    #expect(model.detail?.messages?.count == 2)
+    #expect(model.approvalBucket == .nextAction)
+    #expect(await provider.calls == 1)
 }
