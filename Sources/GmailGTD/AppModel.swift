@@ -116,6 +116,7 @@ final class AppModel {
     private func invalidateCategorisation() {
         categorisationGeneration = UUID()
         jevResults = [:]
+        jevPending = []
         localFailures = [:]
     }
     var loading = false
@@ -184,13 +185,19 @@ final class AppModel {
     private var visible: Set<String> = []
     private var enqueueTask: Task<Void, Never>?
     private var workers = 0
-    /// Measured on-device: two concurrent requests are ~1.3x faster than one, four add little.
     private let maxWorkers = 1   // each suggestion is already two concurrent model requests
+    // A separate, bounded network lane prevents a slow local model on one thread
+    // from holding up Jev on the next (including a newly selected thread).
+    private var jevPending: [String] = []
+    private var jevInflight: Set<String> = []
+    private var jevWorkers = 0
 
     var suggesting: Bool { folder != .bucket(.project) && isQueued(selection) }
     var planning: Bool { folder == .bucket(.project) && isQueued(selection) }
-    func isQueued(_ id: String?) -> Bool { id.map { pending.contains($0) || inflight.contains($0) } ?? false }
-    func isGenerating(_ id: String) -> Bool { inflight.contains(id) }
+    func isQueued(_ id: String?) -> Bool {
+        id.map { pending.contains($0) || inflight.contains($0) || jevPending.contains($0) || jevInflight.contains($0) } ?? false
+    }
+    func isGenerating(_ id: String) -> Bool { inflight.contains(id) || jevInflight.contains(id) }
 
     // MARK: - Session
 
@@ -271,6 +278,7 @@ final class AppModel {
         rows = []
         pending = []
         visible = []
+        jevPending = []
         nextPageToken = nil
         if folder == .today { await loadToday() } else { await reload() }
     }
@@ -461,8 +469,16 @@ final class AppModel {
 
     private func isDone(_ id: String) -> Bool {
         if folder == .bucket(.project) { return store.plan(for: id) != nil || planningUnavailable != nil }
-        let localDone = localSuggestion(for: id) != nil || localFailures[id] != nil
-        return localDone && (!categorisationSettings.jevEnabled || jevResults[id]?.isFinished == true)
+        return isLocalDone(id) && !needsJev(id)
+    }
+
+    private func isLocalDone(_ id: String) -> Bool {
+        if folder == .bucket(.project) { return store.plan(for: id) != nil || planningUnavailable != nil }
+        return localSuggestion(for: id) != nil || localFailures[id] != nil
+    }
+
+    private func needsJev(_ id: String) -> Bool {
+        folder != .bucket(.project) && categorisationSettings.jevEnabled && jevResults[id]?.isFinished != true
     }
 
     /// Rows currently on screen, reported by the list as they scroll in and out.
@@ -503,19 +519,22 @@ final class AppModel {
     /// Anything that scrolled out of view before its turn is dropped from the queue.
     private func enqueueVisible() {
         guard aiFolder, signedIn else { return }
-        var ids = rows.map(\.id).filter { visible.contains($0) && !isDone($0) && !inflight.contains($0) && !failed.contains($0) }
-        if let selection, !isDone(selection), !inflight.contains(selection), !failed.contains(selection) {
+        var ids = rows.map(\.id).filter { visible.contains($0) && !failed.contains($0) }
+        if let selection, !failed.contains(selection) {
             ids.removeAll { $0 == selection }
             ids.insert(selection, at: 0)
         }
-        pending = ids
+        pending = ids.filter { !isLocalDone($0) && !inflight.contains($0) }
+        jevPending = ids.filter { needsJev($0) && !jevInflight.contains($0) }
         startWorkers()
     }
 
     /// Moves a thread to the front of the queue (the one the user is looking at).
     private func prioritize(_ id: String) {
         pending.removeAll { $0 == id }
-        if !inflight.contains(id) { pending.insert(id, at: 0) }
+        jevPending.removeAll { $0 == id }
+        if !isLocalDone(id), !inflight.contains(id) { pending.insert(id, at: 0) }
+        if needsJev(id), !jevInflight.contains(id) { jevPending.insert(id, at: 0) }
         startWorkers()
     }
 
@@ -523,6 +542,10 @@ final class AppModel {
         while workers < maxWorkers && !pending.isEmpty {
             workers += 1
             Task { await drain() }
+        }
+        if jevWorkers == 0 && !jevPending.isEmpty {
+            jevWorkers += 1
+            Task { await drainJev() }
         }
     }
 
@@ -539,8 +562,20 @@ final class AppModel {
         }
     }
 
-    private func process(_ id: String, using client: any MailService) async {
-        let projects = folder == .bucket(.project)
+    private func drainJev() async {
+        defer { jevWorkers -= 1 }
+        while !jevPending.isEmpty {
+            guard let client else { jevPending.removeAll(); return }
+            let id = jevPending.removeFirst()
+            jevInflight.insert(id)
+            await process(id, using: client, source: .jev)
+            jevInflight.remove(id)
+            enqueueVisible()
+        }
+    }
+
+    private func process(_ id: String, using client: any MailService, source: CategorisationSource = .local) async {
+        let projects = source == .local && folder == .bucket(.project)
         let generation = categorisationGeneration
         do {
             let thread = try await client.thread(id, full: true)
@@ -553,9 +588,9 @@ final class AppModel {
             } else {
                 let settings = categorisationSettings
                 let key = SummaryStore.contentKeyForCategorisation(thread)
-                if settings.jevEnabled { jevResults[id] = .pending }
+                if source == .jev && settings.jevEnabled { jevResults[id] = .pending }
                 await categoriser.run(thread, me: email, settings: settings,
-                                      token: settings.jevEnabled ? loadJevToken() : nil) { [weak self] event in
+                                      token: source == .jev ? loadJevToken() : nil, sources: [source]) { [weak self] event in
                     await self?.receive(event, for: thread, settings: settings, generation: generation, key: key)
                 }
                 if generation != categorisationGeneration { scheduleEnqueue() }
@@ -677,7 +712,8 @@ final class AppModel {
 
     /// Takes a thread off the screen now, and selects the next one.
     private func removeLocally(_ id: String) -> (row: ThreadRow?, index: Int?, list: TodayList?) {
-        pending.removeAll { $0 == id }   // No point summarising a thread that has just been filed.
+        pending.removeAll { $0 == id }   // No point categorising a thread that has just been filed.
+        jevPending.removeAll { $0 == id }
         var result: (row: ThreadRow?, index: Int?, list: TodayList?) = (nil, nil, nil)
         if let i = nextActions.firstIndex(where: { $0.id == id }) {
             let row = nextActions.remove(at: i)

@@ -1,5 +1,7 @@
 import Foundation
 
+public enum CategorisationSource: Hashable, Sendable { case local, jev }
+
 public enum CategorisationEvent: Sendable {
     case local(TriageSuggestion), localFailure(String), jev(GTDBucket), jevFailure(String)
 }
@@ -24,13 +26,16 @@ public struct Categoriser: Sendable {
     }
 
     public func run(_ thread: GmailThread, me: String?, settings: CategorisationSettings, token: String?,
+                    sources: Set<CategorisationSource> = [.local, .jev],
                     onResult: @escaping @Sendable (CategorisationEvent) async -> Void) async {
         await withTaskGroup(of: Void.self) { group in
-            group.addTask {
-                do { await onResult(.local(try await local(thread, me, settings.localPrompt))) }
-                catch { await onResult(.localFailure(error.localizedDescription)) }
+            if sources.contains(.local) {
+                group.addTask {
+                    do { await onResult(.local(try await local(thread, me, settings.localPrompt))) }
+                    catch { await onResult(.localFailure(error.localizedDescription)) }
+                }
             }
-            if settings.jevEnabled {
+            if sources.contains(.jev) && settings.jevEnabled {
                 group.addTask {
                     do { await onResult(.jev(try await remote(thread, me, settings.jevPrompt, token ?? ""))) }
                     catch { await onResult(.jevFailure(error.localizedDescription)) }
