@@ -12,7 +12,7 @@ gtd: Gmail GTD from the terminal (add --demo for sample mail, no sign-in)
   gtd inbox [N]                                    List inbox threads
   gtd list <bucket> [N]                            List a bucket
   gtd show <thread-id>                             Print a thread
-  gtd file <thread-id> <bucket>                    File into a bucket (archives from inbox)
+  gtd file <thread-id> <bucket>                    File into a bucket (Inbox placement follows bucket)
   gtd done <thread-id>                             Mark a thread Done (moves it to GTD/Done)
   gtd unfile <thread-id>                           Return to inbox
   gtd suggest <thread-id>                          Local + optional Jev triage suggestions

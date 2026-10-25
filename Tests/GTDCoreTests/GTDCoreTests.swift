@@ -52,18 +52,59 @@ import Foundation
     }
 }
 
-@Test func filingMovesThreadOutOfInboxIntoBucket() async throws {
+@Test(arguments: GTDBucket.allCases, [true, false])
+func filingSetsInboxMembershipAndPreservesMail(bucket: GTDBucket, initiallyInInbox: Bool) async throws {
     let demo = DemoMailService()
     let labels = LabelManager(client: demo)
     let ids = try await labels.ensureLabels()
-    try await labels.file(thread: "in01", into: .nextAction)
-    #expect(try await demo.threadCount(labelID: "INBOX") == 19)
-    let inNext = try await demo.listThreads(labelIDs: [ids[.nextAction]!], max: 50)
-    #expect(inNext.contains { $0.id == "in01" })
+    let custom = try await demo.createLabel("Keep me")
+    let unrelated: Set<String> = ["UNREAD", "STARRED", custom.id]
+    let previous: GTDBucket = bucket == .reference ? .noise : .reference
+    try await demo.modifyThread("in07", add: Array(unrelated) + [ids[previous]!],
+                                remove: initiallyInInbox ? [] : ["INBOX"])
+    let before = try await demo.thread("in07", full: true)
 
-    // Re-filing swaps the bucket rather than stacking labels.
-    try await labels.file(thread: "in01", into: .someday)
-    #expect(!(try await demo.listThreads(labelIDs: [ids[.nextAction]!], max: 50)).contains { $0.id == "in01" })
+    try await labels.file(thread: "in07", into: bucket)
+    // Applying the same category again must also be safe.
+    try await labels.file(thread: "in07", into: bucket)
+
+    var expected = unrelated.union([ids[bucket]!])
+    if [GTDBucket.nextAction, .waitingFor, .someday].contains(bucket) { expected.insert("INBOX") }
+    let after = try await demo.thread("in07", full: true)
+    let messages = try #require(after.messages)
+    #expect(messages.map(\.id) == before.messages?.map(\.id))
+    #expect(messages.map(\.plainText) == before.messages?.map(\.plainText))
+    for message in messages {
+        // Exact equality also guards against stale GTD labels, TRASH or lost unrelated labels.
+        #expect(Set(message.labelIds ?? []) == expected)
+    }
+    let filed = try await demo.listThreads(labelIDs: [ids[bucket]!], max: 50)
+    #expect(filed.contains { $0.id == "in07" })
+}
+
+@Test(arguments: [GTDBucket.nextAction, .waitingFor, .someday], [GTDBucket.reference, .noise])
+func changingBetweenActionableAndSearchOnlyUpdatesInbox(actionable: GTDBucket, searchOnly: GTDBucket) async throws {
+    let demo = DemoMailService()
+    let labels = LabelManager(client: demo)
+    let ids = try await labels.ensureLabels()
+
+    try await labels.file(thread: "in01", into: searchOnly)
+    let archived = try await labels.managedLabels(in: try await demo.thread("in01").messages!.last!.labelIds ?? [])
+    #expect(archived == [ids[searchOnly]!])
+
+    // A previously archived message must return to the inbox when it becomes actionable.
+    try await labels.file(thread: "in01", into: actionable)
+    let active = try await labels.managedLabels(in: try await demo.thread("in01").messages!.last!.labelIds ?? [])
+    #expect(active == ["INBOX", ids[actionable]!])
+
+    try await labels.file(thread: "in01", into: searchOnly)
+    let rearchived = try await labels.managedLabels(in: try await demo.thread("in01").messages!.last!.labelIds ?? [])
+    #expect(rearchived == archived)
+
+    try await labels.restore(thread: "in01", to: active)
+    #expect(try await labels.managedLabels(in: try await demo.thread("in01").messages!.last!.labelIds ?? []) == active)
+    try await labels.restore(thread: "in01", to: archived)
+    #expect(try await labels.managedLabels(in: try await demo.thread("in01").messages!.last!.labelIds ?? []) == archived)
 }
 
 @Test func doneIsABucketSoEveryThreadKeepsAGTDLabel() async throws {
@@ -373,11 +414,11 @@ private let sampleSuggestion = TriageSuggestion(bucket: .nextAction, nextAction:
     let labels = LabelManager(client: demo)
     let ids = try await labels.ensureLabels()
 
-    // From the inbox into a bucket, and back.
+    // From the inbox into an actionable bucket, and back (inbox membership is preserved).
     let before = try await labels.managedLabels(in: try await demo.thread("in01", full: true).messages!.last!.labelIds ?? [])
     #expect(before == ["INBOX"])                               // UNREAD is not ours to touch
     try await labels.file(thread: "in01", into: .someday)
-    #expect(try await demo.threadCount(labelID: "INBOX") == 19)
+    #expect(try await demo.threadCount(labelID: "INBOX") == 20)
     try await labels.restore(thread: "in01", to: before)
     #expect(try await demo.threadCount(labelID: "INBOX") == 20)
     #expect(try await demo.threadCount(labelID: ids[.someday]!) == 3)
