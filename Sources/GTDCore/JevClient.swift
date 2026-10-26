@@ -5,6 +5,8 @@ public struct JevClient: Sendable {
     public typealias Transport = @Sendable (URLRequest) async throws -> (Data, HTTPURLResponse)
     private let transport: Transport
     public static let model = "jev-1.14.0"
+    /// Bump when response interpretation/settings change (v2 retains Noise probabilities from #21).
+    public static let classificationFormat = "choice-bucket-noise-probability-v2"
     // Docs: 64k tokens/request, 32k/question (state + instructions + criteria).
     // A single question, capped at 30k *encoded UTF-8 bytes*, conservatively budgets tokens
     // without assuming English's usual characters/token ratio. Reserve room for provider framing.
@@ -79,6 +81,7 @@ public struct JevClient: Sendable {
         ]
         let questions = ["bucket": Question(instructions: prompt, criteria: criteria)]
         let encoder = JSONEncoder()
+        encoder.outputFormatting = .sortedKeys // Also makes credential-free cache fingerprints stable.
         let overhead = try encoder.encode(Request(state: "", questions: questions)).count
         // Limit the *JSON-encoded* state, including escapes, not just its character count.
         var state = transcript(thread, me: me, maxBytes: max(0, maxRequestBytes - overhead))

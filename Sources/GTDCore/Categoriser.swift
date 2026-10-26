@@ -19,6 +19,11 @@ public struct Categoriser: Sendable {
         self.remote = remote
     }
 
+    /// The app cache shares only remote work; local summaries remain independently scheduled.
+    public func classifyWithJev(_ thread: GmailThread, me: String?, prompt: String, token: String) async throws -> JevClassification {
+        try await remote(thread, me, prompt, token)
+    }
+
     public func evaluate(_ thread: GmailThread, me: String?, settings: CategorisationSettings, token: String?) async -> CategorisationOutput {
         let collector = CategorisationCollector()
         await run(thread, me: me, settings: settings, token: token) { await collector.record($0) }
