@@ -20,11 +20,18 @@ public actor LabelManager {
         return ids
     }
 
-    /// Files a thread into a bucket, clearing other GTD labels. Next Action, Waiting For and Someday
+    /// Backlog is a user-managed processing queue, not a final GTD bucket. Never create it on read.
+    /// Resolve on demand so a label created in Gmail after launch appears on the next refresh.
+    public func backlogLabelID() async throws -> String? {
+        try await client.labels().first { $0.name == "Backlog" }?.id
+    }
+
+    /// Files a thread into a bucket, clearing Backlog and other GTD labels. Next Action, Waiting For and Someday
     /// belong in the inbox (even if previously archived); the remaining buckets are archived, never deleted.
     public func file(thread id: String, into bucket: GTDBucket) async throws {
         let all = try await ensureLabels()
-        let others = all.filter { $0.key != bucket }.map(\.value)
+        let backlog = try await backlogLabelID().map { [$0] } ?? []
+        let others = all.filter { $0.key != bucket }.map(\.value) + backlog
         let keepInInbox = switch bucket {
         case .nextAction, .waitingFor, .someday: true
         case .reference, .noise, .project, .done: false
@@ -34,23 +41,29 @@ public actor LabelManager {
                                       remove: others + (keepInInbox ? [] : ["INBOX"]))
     }
 
-    /// Returns a thread to the inbox, clearing its GTD labels.
+    /// Returns a thread to the inbox, clearing its GTD and Backlog labels.
     public func unfile(thread id: String) async throws {
         let all = try await ensureLabels()
-        try await client.modifyThread(id, add: ["INBOX"], remove: Array(all.values))
+        let backlog = try await backlogLabelID().map { [$0] } ?? []
+        try await client.modifyThread(id, add: ["INBOX"], remove: Array(all.values) + backlog)
     }
 
-    /// The labels this app manages (the inbox and every GTD bucket) among a thread's label IDs. Recorded before
+    /// The labels this app manages (Inbox, Backlog and every GTD bucket) among a thread's label IDs. Recorded before
     /// a move so the move can be undone exactly.
     public func managedLabels(in labelIDs: [String]) async throws -> Set<String> {
-        let managed = Set(try await ensureLabels().values).union(["INBOX"])
-        return Set(labelIDs).intersection(managed)
+        Set(labelIDs).intersection(try await managedLabelIDs())
     }
 
     /// Sets a thread's managed labels back to a recorded set. Other labels (UNREAD, STARRED, yours) are left alone.
     public func restore(thread id: String, to previous: Set<String>) async throws {
-        let managed = Set(try await ensureLabels().values).union(["INBOX"])
+        let managed = try await managedLabelIDs()
         try await client.modifyThread(id, add: Array(previous), remove: Array(managed.subtracting(previous)))
+    }
+
+    private func managedLabelIDs() async throws -> Set<String> {
+        let buckets = try await ensureLabels()
+        let backlog = try await backlogLabelID().map { [$0] } ?? []
+        return Set(buckets.values).union(["INBOX"]).union(backlog)
     }
 
     public func bucket(for labelIDs: [String]) -> GTDBucket? {

@@ -14,6 +14,19 @@ returning previously archived threads to the Inbox too. Reference and Noise are 
 and remain searchable under their GTD labels. Project and Done keep their existing archive behaviour.
 These rules apply when filing a thread; existing mail is not bulk-migrated.
 
+## Backlog
+
+To keep Inbox for new mail, manually apply the Gmail user label **Backlog** to old mail and
+archive it in Gmail. Open **Backlog** in the sidebar (or the Go menu) to triage that archived
+mail with the same category buttons, suggestions, approval and `1`–`7` shortcuts as Inbox.
+Backlog is a processing queue, not another GTD destination. If the label does not exist, the
+view is empty; the app does not create it or move old mail automatically.
+
+Viewing Backlog never adds INBOX or changes labels. Explicit filing removes Backlog and applies
+the normal destination rules above, preserving unrelated labels. Undo restores Backlog and the
+original Inbox/archive state. `0` explicitly moves the thread back to Inbox and clears Backlog.
+De-noise bulk mode remains Inbox-only.
+
 ## Demo mode
 
 No Google account or sign-in needed. Demo mode loads a fictional mailbox (20 inbox threads plus
@@ -79,7 +92,7 @@ Jev stops new provider calls; an already-sent request cannot be recalled and its
 Sign-out deletes this mailbox’s persisted Jev cache and clears in-memory results, but retains provider settings/token, like the saved OAuth client
 configuration. Turning Jev off restores local-only approval immediately.
 
-**Privacy/cost:** when enabled, on-screen threads in Inbox, Next Action and Waiting For are sent
+**Privacy/cost:** when enabled, on-screen threads in Inbox, Backlog, Next Action and Waiting For are sent
 automatically to TypeSafe, including sender, subject and message text (not attachments). API charges
 may apply. Demo mode follows the same opt-in using fictional mail. Nothing is filed automatically.
 The detail pane identifies both sources; **Approve** (also **A**) uses Jev whenever enabled, including
@@ -195,6 +208,6 @@ never overwritten. To remove retained history, quit the app and delete that loca
 
 - Requires macOS 26+ for Foundation Models. Threads are trimmed to fit the small on-device
   context window.
-- The model runs automatically on the open inbox thread, but nothing is filed until you accept.
+- The model runs automatically on the open Inbox or Backlog thread, but nothing is filed until you accept.
 - Compose and reply aren't built yet; use Open in Gmail.
-- Keys in the app: `1`-`7` file into a bucket, `0` back to inbox, `⌘1`-`⌘7` go to a bucket, `⌘0` Inbox, `⌘T` Today, `⌘Z` undo the last move, `A` accept, `E` done (finished with it), `R` regenerate, `O` open in Gmail. Hold `⌘` for the full list. Suggestions generate automatically for the open inbox thread (and plans for projects); Regenerate re-runs one.
+- Keys in the app: `1`-`7` file into a bucket, `0` back to inbox, `⌘1`-`⌘7` go to a bucket, `⌘0` Inbox, `⌘T` Today, `⌘Z` undo the last move, `A` accept, `E` done (finished with it), `R` regenerate, `O` open in Gmail. Hold `⌘` for the full list. Suggestions generate automatically for the open Inbox or Backlog thread (and plans for projects); Regenerate re-runs one.

@@ -1,8 +1,9 @@
 import AppKit
 import SwiftUI
+import GTDCore
 
 /// Menu key equivalents alone lose to a focused List's type-to-select handling.
-/// Intercept approval before AppKit dispatches the key to that list, only in the mail window.
+/// Intercept approval and number-to-category shortcuts before dispatch, only in the mail window.
 struct ApprovalShortcutHandler: NSViewRepresentable {
     let model: AppModel
 
@@ -45,22 +46,24 @@ final class ApprovalShortcutView: NSView {
     /// Returning nil consumes the key: it must not also select a row or invoke the menu action.
     func handle(_ event: NSEvent) -> NSEvent? {
         guard event.type == .keyDown,
-              event.charactersIgnoringModifiers?.lowercased() == "a",
+              let key = event.charactersIgnoringModifiers?.lowercased(),
               event.modifierFlags.intersection([.command, .control, .option, .function]).isEmpty,
               let window, event.window === window,
               window.attachedSheet == nil, NSApp.modalWindow == nil,
               !Self.isEditing(window.firstResponder),
               let model, model.signedIn, !model.showingCategorisationSettings, model.deNoiseBatch == nil,
-              let id = model.selection, model.detail?.id == id,
-              let bucket = model.approvalBucket else { return event }
+              let id = model.selection, model.detail?.id == id else { return event }
+        let manualBucket = GTDBucket.allCases.first { String($0.shortcut) == key }
+        guard let bucket = manualBucket ?? (key == "a" ? model.approvalBucket : nil) else { return event }
 
-        // Holding A must not approve a stream of newly selected threads.
+        // Holding a key must not file a stream of newly selected threads.
         if !event.isARepeat {
             Task { [weak model] in
                 guard let model, model.signedIn, model.selection == id, model.detail?.id == id,
                       !model.showingCategorisationSettings, model.deNoiseBatch == nil,
-                      model.approvalBucket == bucket else { return }
-                await model.acceptSuggestion()
+                      manualBucket != nil || model.approvalBucket == bucket else { return }
+                if manualBucket != nil { await model.fileSelected(into: bucket) }
+                else { await model.acceptSuggestion() }
             }
         }
         return nil
