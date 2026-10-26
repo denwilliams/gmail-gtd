@@ -216,6 +216,24 @@ actor CountingService: MailService {
     #expect(await server.listCalls == 2)
 }
 
+@Test func refreshingListsKeepsReusableBodiesButStillDetectsChangedHistory() async throws {
+    let server = CountingService()
+    let cache = CachedMailService(server, listTTL: 60)
+    _ = try await cache.listThreads(labelIDs: ["INBOX"], max: 10)
+    _ = try await cache.thread("in01", full: true)
+    await cache.invalidateLists()
+    _ = try await cache.listThreads(labelIDs: ["INBOX"], max: 10)
+    _ = try await cache.thread("in01", full: true)
+    #expect(await server.listCalls == 2)
+    #expect(await server.threadCalls == 1)
+    await server.bump()
+    await cache.invalidateLists()
+    _ = try await cache.listThreads(labelIDs: ["INBOX"], max: 10)
+    _ = try await cache.thread("in01", full: true)
+    #expect(await server.listCalls == 3)
+    #expect(await server.threadCalls == 2)
+}
+
 @Test func cacheRefetchesWhenGmailReportsANewerHistoryID() async throws {
     let server = CountingService()
     let cache = CachedMailService(server, listTTL: 0)

@@ -48,6 +48,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 struct GmailGTDApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @State private var model = AppModel()
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
         // One window: every view shares one model, so extra windows would only duplicate it. Unlike a WindowGroup,
@@ -56,6 +57,9 @@ struct GmailGTDApp: App {
             ContentView()
                 .environment(model)
                 .frame(minWidth: 1000, minHeight: 560)
+                .onChange(of: scenePhase, initial: true) { _, phase in
+                    model.setAppActive(phase == .active)
+                }
                 .task {
                     if ScreenshotExport.directory != nil { ScreenshotExport.log("window task started") }
                     await model.start()
