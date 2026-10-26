@@ -20,10 +20,13 @@ public actor LabelManager {
         return ids
     }
 
+    /// The Gmail label for the Backlog queue. It sits with the buckets under `GTD/`, but is not one of them.
+    public static let backlogLabelName = "\(GTDBucket.labelPrefix)/Backlog"
+
     /// Backlog is a user-managed processing queue, not a final GTD bucket. Never create it on read.
     /// Resolve on demand so a label created in Gmail after launch appears on the next refresh.
     public func backlogLabelID() async throws -> String? {
-        try await client.labels().first { $0.name == "Backlog" }?.id
+        try await client.labels().first { $0.name == Self.backlogLabelName }?.id
     }
 
     /// Files a thread into a bucket, clearing Backlog and other GTD labels. Next Action, Waiting For and Someday

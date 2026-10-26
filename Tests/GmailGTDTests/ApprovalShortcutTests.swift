@@ -103,7 +103,7 @@ private enum ShortcutTestError: Error { case unavailable }
     func numberKeysFileSameCategoriesFromInboxAndBacklog(folder: Folder, bucket: GTDBucket) async throws {
         let service = DemoMailService()
         let unrelated = try await service.createLabel("Keep me")
-        let backlog = try await service.createLabel("Backlog")
+        let backlog = try await service.createLabel(LabelManager.backlogLabelName)
         if folder == .backlog {
             // Archived mail, not returned to INBOX just because the app loads it.
             for id in ["in01", "in02"] {

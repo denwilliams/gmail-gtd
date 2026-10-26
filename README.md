@@ -16,7 +16,7 @@ These rules apply when filing a thread; existing mail is not bulk-migrated.
 
 ## Backlog
 
-To keep Inbox for new mail, manually apply the Gmail user label **Backlog** to old mail and
+To keep Inbox for new mail, manually apply the Gmail label **GTD/Backlog** to old mail and
 archive it in Gmail. Open **Backlog** in the sidebar (or the Go menu) to triage that archived
 mail with the same category buttons, suggestions, approval and `1`–`7` shortcuts as Inbox.
 Backlog is a processing queue, not another GTD destination. If the label does not exist, the

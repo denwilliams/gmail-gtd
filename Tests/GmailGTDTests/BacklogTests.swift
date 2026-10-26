@@ -53,9 +53,9 @@ private actor BacklogProbe: MailService {
     #expect(model.selection == nil)
     #expect(model.error == nil)
     #expect(await service.requestedLabels.isEmpty) // No all-mail fallback for a missing label.
-    #expect(try await service.labels().allSatisfy { $0.name != "Backlog" })
+    #expect(try await service.labels().allSatisfy { $0.name != LabelManager.backlogLabelName })
 
-    let backlog = try await service.createLabel("Backlog")
+    let backlog = try await service.createLabel(LabelManager.backlogLabelName)
     try await service.base.modifyThread("in01", add: [backlog.id], remove: ["INBOX"])
     await model.refresh()
     try await backlogEventually { model.detail?.id == "in01" && model.suggestion != nil }
@@ -68,7 +68,7 @@ private actor BacklogProbe: MailService {
 
 @Test @MainActor func backlogListsArchivedMailPagesWithoutRestoringInbox() async throws {
     let service = BacklogProbe()
-    let backlog = try await service.createLabel("Backlog")
+    let backlog = try await service.createLabel(LabelManager.backlogLabelName)
     let refs = try await service.base.listThreads(labelIDs: ["INBOX"], max: 50)
     let oldIDs = Array(refs.prefix(10).map(\.id))
     for id in oldIDs {
@@ -100,7 +100,7 @@ private actor BacklogProbe: MailService {
 
 @Test @MainActor func failedBacklogFilingRestoresRowAndKeepsLabels() async throws {
     let service = BacklogProbe()
-    let backlog = try await service.createLabel("Backlog")
+    let backlog = try await service.createLabel(LabelManager.backlogLabelName)
     try await service.base.modifyThread("in01", add: [backlog.id], remove: ["INBOX"])
     let before = try await service.thread("in01", full: true)
     let model = await backlogModel(using: service)

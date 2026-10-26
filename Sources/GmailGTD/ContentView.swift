@@ -215,7 +215,7 @@ struct ThreadListView: View {
                 if model.loading && model.rows.isEmpty { ProgressView() }
                 else if model.folder == .backlog && model.rows.isEmpty {
                     ContentUnavailableView("No Backlog Mail", systemImage: Folder.backlog.symbol,
-                                           description: Text("Apply the Backlog label in Gmail and archive old mail to process it here."))
+                                           description: Text("Apply the \(LabelManager.backlogLabelName) label in Gmail and archive old mail to process it here."))
                 }
             }
             .focused(focus)
