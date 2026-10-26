@@ -5,6 +5,7 @@ import GTDCore
 enum Folder: Hashable, Identifiable {
     case today
     case inbox
+    case backlog
     case corrections
     case bucket(GTDBucket)
 
@@ -13,6 +14,7 @@ enum Folder: Hashable, Identifiable {
         switch self {
         case .today: "Today"
         case .inbox: "Inbox"
+        case .backlog: "Backlog"
         case .corrections: "Corrections"
         case .bucket(let b): b.title
         }
@@ -21,6 +23,7 @@ enum Folder: Hashable, Identifiable {
         switch self {
         case .today: "sun.max"
         case .inbox: "tray"
+        case .backlog: "tray.full"
         case .corrections: "arrow.triangle.branch"
         case .bucket(.nextAction): "bolt"
         case .bucket(.waitingFor): "hourglass"
@@ -31,14 +34,17 @@ enum Folder: Hashable, Identifiable {
         case .bucket(.done): "checkmark.circle"
         }
     }
-    static let mail: [Folder] = [.inbox] + GTDBucket.allCases.map(Folder.bucket)
+    /// Unprocessed queues share the same category controls, suggestions and shortcut hints.
+    var isTriage: Bool { self == .inbox || self == .backlog }
+
+    static let mail: [Folder] = [.inbox, .backlog] + GTDBucket.allCases.map(Folder.bucket)
 }
 
 enum DetailTab: Hashable { case summary, original }
 
 enum TodayList { case nextActions, waiting }
 
-/// A move, with what is needed to take it back: the thread's inbox and GTD labels before, and the list row
+/// A move, with what is needed to take it back: the thread's Inbox, Backlog and GTD labels before, and the list row
 /// that was taken off the screen (and where it sat), so undo can put it back at once.
 struct UndoMove: Identifiable {
     let id: UUID
@@ -493,8 +499,12 @@ final class AppModel {
         endDeNoiseMode()
         guard folder != .corrections, client != nil else { return }
         loading = true; defer { loading = false }
+        let openFolder = folder
+        let generation = mailboxGeneration
         do {
-            let page = try await fetchPage(labelID: labelID(for: folder), max: pageSize, hydrate: false, pageToken: nil)
+            let label = try await labelID(for: openFolder)
+            let page = try await fetchPage(labelID: label, max: pageSize, hydrate: false, pageToken: nil)
+            guard folder == openFolder, generation == mailboxGeneration else { return }
             rows = page.rows
             nextPageToken = page.next
             selectFirstIfNeeded()
@@ -509,9 +519,10 @@ final class AppModel {
         selection = rows.first?.id
     }
 
-    private func labelID(for folder: Folder) -> String {
+    private func labelID(for folder: Folder) async throws -> String {
         switch folder {
         case .today, .inbox: "INBOX"
+        case .backlog: try await labels?.backlogLabelID() ?? ""
         case .corrections: "" // Local history never maps to a Gmail label.
         case .bucket(let b): labelIDs[b] ?? ""
         }
@@ -524,7 +535,8 @@ final class AppModel {
     }
 
     private func fetchPage(labelID: String, max: Int, hydrate: Bool, pageToken: String?) async throws -> (rows: [ThreadRow], next: String?) {
-        guard let client else { return ([], nil) }
+        // A missing Backlog label is an empty queue, not an unfiltered all-mail request.
+        guard let client, !labelID.isEmpty else { return ([], nil) }
         let generation = mailboxGeneration
         let page = try await client.listThreadPage(labelIDs: [labelID], query: nil, max: max, pageToken: pageToken)
         guard generation == mailboxGeneration else { throw CancellationError() }
@@ -707,10 +719,10 @@ final class AppModel {
 
     // MARK: - On-device AI
 
-    /// Folders where the model works through the list on its own: triage in the inbox, plans in projects.
+    /// Folders where the model works through the list on its own: Inbox/Backlog triage, project plans.
     private var aiFolder: Bool {
         switch folder {
-        case .inbox, .bucket(.project), .bucket(.nextAction), .bucket(.waitingFor): true
+        case .inbox, .backlog, .bucket(.project), .bucket(.nextAction), .bucket(.waitingFor): true
         default: false
         }
     }
@@ -744,7 +756,8 @@ final class AppModel {
         loadingMore = true; defer { loadingMore = false }
         let openFolder = folder
         do {
-            let page = try await fetchPage(labelID: labelID(for: openFolder), max: pageSize, hydrate: false, pageToken: token)
+            let label = try await labelID(for: openFolder)
+            let page = try await fetchPage(labelID: label, max: pageSize, hydrate: false, pageToken: token)
             guard folder == openFolder else { return }   // the user has moved to another folder
             let known = Set(rows.map(\.id))
             rows += page.rows.filter { !known.contains($0.id) }
@@ -1114,7 +1127,8 @@ final class AppModel {
         guard force || rows.count <= pageSize + 10 else { return }
         let openFolder = folder
         do {
-            let page = try await fetchPage(labelID: labelID(for: openFolder), max: pageSize, hydrate: false, pageToken: nil)
+            let label = try await labelID(for: openFolder)
+            let page = try await fetchPage(labelID: label, max: pageSize, hydrate: false, pageToken: nil)
             // A review or sign-out may have happened while the list request was in flight.
             guard !Task.isCancelled, client != nil, folder == openFolder, deNoiseBatch == nil else { return }
             let oldRows = rows

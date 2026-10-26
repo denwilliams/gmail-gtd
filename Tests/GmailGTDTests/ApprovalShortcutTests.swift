@@ -60,9 +60,10 @@ private enum ShortcutTestError: Error { case unavailable }
     try #require(condition(), "Timed out waiting for shortcut approval")
 }
 
-@MainActor private func shortcutModel(jevEnabled: Bool = false, remoteSucceeds: Bool = true) async throws -> AppModel {
+@MainActor private func shortcutModel(jevEnabled: Bool = false, remoteSucceeds: Bool = true,
+                                      folder: Folder = .inbox, service: DemoMailService = DemoMailService()) async throws -> AppModel {
     var settings = CategorisationSettings(); settings.jevEnabled = jevEnabled
-    let model = AppModel(signedIn: true, settings: settings, folder: .inbox,
+    let model = AppModel(signedIn: true, settings: settings, folder: folder,
                          categoriser: Categoriser(local: { _, _, _ in
         TriageSuggestion(bucket: .reference, nextAction: "", summary: "Local summary.")
     }, remote: { _, _, _, _ in
@@ -70,7 +71,7 @@ private enum ShortcutTestError: Error { case unavailable }
         return JevClassification(bucket: .noise)
     }), loadJevToken: { "mock-token" })
     model.demo = true
-    await model.connect(using: DemoMailService(), persist: false)
+    await model.connect(using: service, persist: false)
     try await shortcutEventually { model.detail?.id == model.selection && model.suggestion != nil && !model.suggesting }
     return model
 }
@@ -96,6 +97,76 @@ private enum ShortcutTestError: Error { case unavailable }
         #expect(!model.rows.contains { $0.id == selectedID })
         await model.refreshQuietly()   // Wait for the same normal filing path to finish.
         #expect(model.error == nil)
+    }
+
+    @Test(arguments: [Folder.inbox, .backlog], GTDBucket.allCases)
+    func numberKeysFileSameCategoriesFromInboxAndBacklog(folder: Folder, bucket: GTDBucket) async throws {
+        let service = DemoMailService()
+        let unrelated = try await service.createLabel("Keep me")
+        let backlog = try await service.createLabel("Backlog")
+        if folder == .backlog {
+            // Archived mail, not returned to INBOX just because the app loads it.
+            for id in ["in01", "in02"] {
+                try await service.modifyThread(id, add: [backlog.id, unrelated.id, "STARRED"], remove: ["INBOX"])
+            }
+        }
+        let model = try await shortcutModel(jevEnabled: true, remoteSucceeds: false, folder: folder, service: service)
+        defer { model.signOut() }
+        #expect(model.approvalBucket == nil)   // Manual keys never depend on a successful AI result.
+        let selectedID = try #require(model.selection)
+        let before = try await service.thread(selectedID, full: true)
+        let fixture = ShortcutWindow(model: model)
+        defer { fixture.close() }
+
+        NSApplication.shared.sendEvent(try fixture.event(String(bucket.shortcut)))
+        #expect(fixture.table.deliveredKeys == 0)
+        try await shortcutEventually { model.undoStack.count == 1 }
+        #expect(model.undoStack.first?.threadID == selectedID)
+        #expect(model.undoStack.first?.destination == bucket)
+        #expect(!model.rows.contains { $0.id == selectedID })
+        await model.refreshQuietly()
+        #expect(model.error == nil)
+        let destination = try #require(try await service.labels().first { $0.name == bucket.labelName })
+        let after = try await service.thread(selectedID, full: true)
+        let shouldBeInInbox = [GTDBucket.nextAction, .waitingFor, .someday].contains(bucket)
+        for message in try #require(after.messages) {
+            let labels = Set(message.labelIds ?? [])
+            #expect(labels.contains(destination.id))
+            #expect(!labels.contains(backlog.id))
+            #expect(labels.contains("INBOX") == shouldBeInInbox)
+            if folder == .backlog {
+                #expect(labels.contains(unrelated.id))
+                #expect(labels.contains("STARRED"))
+            }
+        }
+        // Undo restores Backlog and its prior archived state, not just the GTD label.
+        await model.undoLastMove()
+        await model.refreshQuietly()
+        let undone = try await service.thread(selectedID, full: true)
+        #expect(undone.messages?.map { Set($0.labelIds ?? []) } == before.messages?.map { Set($0.labelIds ?? []) })
+        #expect(model.rows.contains { $0.id == selectedID })
+        #expect(model.error == nil)
+    }
+
+    @Test func numberKeysDoNotInterceptTypingModifiedOrRepeatedKeys() async throws {
+        let model = try await shortcutModel()
+        defer { model.signOut() }
+        let fixture = ShortcutWindow(model: model)
+        defer { fixture.close() }
+        for modifiers in [NSEvent.ModifierFlags.command, .control, .option, .function] {
+            let event = try fixture.event("6", modifiers: modifiers)
+            #expect(fixture.handler.handle(event) === event)
+        }
+        NSApplication.shared.sendEvent(try fixture.event("6", repeatKey: true))
+        await Task.yield()
+        #expect(model.undoStack.isEmpty)
+        let editor = NSTextView(frame: NSRect(x: 0, y: 210, width: 200, height: 60))
+        fixture.window.contentView?.addSubview(editor)
+        fixture.window.makeFirstResponder(editor)
+        NSApplication.shared.sendEvent(try fixture.event("6"))
+        #expect(editor.string == "6")
+        await Task.yield()
+        #expect(model.undoStack.isEmpty)
     }
 
     @Test func disabledApprovalDoesNotFallBackToLocalOrApproveAnotherThread() async throws {

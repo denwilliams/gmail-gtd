@@ -85,6 +85,7 @@ struct GmailGTDApp: App {
                     Button("Today") { model.folder = .today }
                         .keyboardShortcut("t", modifiers: .command)
                     Button("Corrections") { model.folder = .corrections }
+                    Button("Backlog") { model.folder = .backlog }
                     Button("Inbox") { model.folder = .inbox }
                         .keyboardShortcut("0", modifiers: .command)
                     Divider()

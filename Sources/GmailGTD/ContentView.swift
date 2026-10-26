@@ -53,6 +53,7 @@ struct MailView: View {
                 sidebarRow("Today", Folder.today.symbol, .yellow, hint: "\u{2318}T").tag(Folder.today)
                 Section("Process") {
                     sidebarRow("Inbox", Folder.inbox.symbol, .accentColor, hint: "\u{2318}0").tag(Folder.inbox)
+                    sidebarRow("Backlog", Folder.backlog.symbol, .accentColor, hint: "").tag(Folder.backlog)
                 }
                 Section("Local") {
                     sidebarRow("Corrections", Folder.corrections.symbol, .orange, hint: "").tag(Folder.corrections)
@@ -210,7 +211,13 @@ struct ThreadListView: View {
                     ProgressView().controlSize(.small).frame(maxWidth: .infinity).padding(.vertical, 6)
                 }
             }
-            .overlay { if model.loading && model.rows.isEmpty { ProgressView() } }
+            .overlay {
+                if model.loading && model.rows.isEmpty { ProgressView() }
+                else if model.folder == .backlog && model.rows.isEmpty {
+                    ContentUnavailableView("No Backlog Mail", systemImage: Folder.backlog.symbol,
+                                           description: Text("Apply the Backlog label in Gmail and archive old mail to process it here."))
+                }
+            }
             .focused(focus)
         }
         .frame(width: 340)
@@ -248,7 +255,7 @@ extension RowView {
     /// The inbox prefers Jev's category; filed buckets keep their on-device action text.
     @ViewBuilder fileprivate func rowTag(for suggestion: TriageSuggestion?) -> some View {
         switch model.folder {
-        case .inbox:
+        case .inbox, .backlog:
             if let bucket = model.inboxBucket(for: row.id) { BucketChip(bucket: bucket) }
         case .bucket(.nextAction):
             if let nextAction = suggestion?.nextAction, !nextAction.isEmpty {
@@ -272,7 +279,7 @@ struct ThreadDetailView: View {
     var body: some View {
         if let thread = model.detail {
             VStack(spacing: 0) {
-                if model.folder == .inbox { TriageBar(threadID: thread.id) } else { BucketBar(threadID: thread.id) }
+                if model.folder.isTriage { TriageBar(threadID: thread.id) } else { BucketBar(threadID: thread.id) }
                 if model.showsFiledJevStatus {
                     VStack(alignment: .leading, spacing: 8) {
                         if model.suggestion == nil, let note = model.aiNote {
@@ -443,7 +450,7 @@ struct SummaryView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             // Inbox and active filed folders already show status above the tab picker.
-            if model.folder != .inbox && !model.showsFiledJevStatus && model.suggestion == nil { JevStatusView() }
+            if !model.folder.isTriage && !model.showsFiledJevStatus && model.suggestion == nil { JevStatusView() }
             summaryContent
         }
     }
@@ -686,7 +693,7 @@ struct KeyHintBar: View {
     var body: some View {
         HStack(spacing: 14) {
             hint(["↑", "↓"], "move")
-            if model.folder == .inbox {
+            if model.folder.isTriage {
                 hint(["1", "–", "7"], "file")
                 hint(["A"], "accept")
             } else {
@@ -728,7 +735,7 @@ struct ShortcutHUD: View {
                     (["0"], "Back to Inbox", nil),
                 ])
                 group("Thread", [
-                    (["A"], "Accept the suggestion (Inbox)", nil),
+                    (["A"], "Accept the suggestion (Inbox/Backlog)", nil),
                     (["E"], "Done: finished with it (same as 7)", nil),
                     (["R"], "Regenerate the suggestion", nil),
                     (["O"], "Open in Gmail", nil),
