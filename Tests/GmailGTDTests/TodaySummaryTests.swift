@@ -71,7 +71,7 @@ private func summaryThread(_ id: String, messageID: String = "message") throws -
     await model.finish(row)
     #expect(model.nextActions.map(\.id) == otherIDs)
     #expect(model.undoToast?.threadID == row.id)
-    #expect(model.undoToast?.destination == .done)
+    #expect(model.undoToast?.destination == .reference)   // Done files it as Reference
     await model.undoLastMove()
     #expect(model.nextActions.first?.id == row.id)
     #expect(model.nextActionSummary(for: row.id) == "The hovered item's summary.")

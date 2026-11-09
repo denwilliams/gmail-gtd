@@ -86,7 +86,7 @@ struct GmailGTDApp: App {
                         .keyboardShortcut("t", modifiers: .command)
                     Button("Corrections") { model.folder = .corrections }
                     Button("Backlog") { model.folder = .backlog }
-                    Button("Inbox") { model.folder = .inbox }
+                    Button("In-tray") { model.folder = .inTray }
                         .keyboardShortcut("0", modifiers: .command)
                     Divider()
                     ForEach(GTDBucket.allCases, id: \.self) { bucket in
@@ -104,13 +104,13 @@ struct GmailGTDApp: App {
                         Button("File as \(bucket.title)") { Task { await model.fileSelected(into: bucket) } }
                             .keyboardShortcut(KeyEquivalent(bucket.shortcut), modifiers: [])
                     }
-                    Button("Back to Inbox") { Task { await model.unfileSelected() } }
+                    Button("Back to In-tray") { Task { await model.unfileSelected() } }
                         .keyboardShortcut("0", modifiers: [])
                     Divider()
                     Button("Approve Suggestion") { Task { await model.acceptSuggestion() } }
                         .keyboardShortcut("a", modifiers: [])
                         .disabled(model.approvalBucket == nil || model.showingCategorisationSettings)
-                    Button("Done") { Task { await model.finishSelected() } }
+                    Button("Done (File as Reference)") { Task { await model.finishSelected() } }
                         .keyboardShortcut("e", modifiers: [])
                         .disabled(!model.canFinish)
                     Button("Regenerate Suggestion") { model.regenerateSelected() }

@@ -153,7 +153,7 @@ private actor RefreshMail: MailService {
     _ mail: RefreshMail,
     quietRefreshSleep: @escaping @MainActor (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
 ) async -> AppModel {
-    let model = AppModel(signedIn: true, settings: CategorisationSettings(), folder: .inbox,
+    let model = AppModel(signedIn: true, settings: CategorisationSettings(), folder: .inTray,
                          categoriser: Categoriser(local: { _, _, _ in throw RefreshTestError.unavailable }),
                          loadJevToken: { nil }, quietRefreshSleep: quietRefreshSleep)
     model.demo = true
@@ -387,7 +387,7 @@ func reactivationWaitsForCancelledIdleRefreshIncludingReplacedOwners(reschedule:
     }, remote: { thread, _, _, _ in
         JevClassification(bucket: thread.historyId == "2" ? .nextAction : .reference)
     })
-    let model = AppModel(signedIn: true, settings: settings, folder: .inbox,
+    let model = AppModel(signedIn: true, settings: settings, folder: .inTray,
                          categoriser: categoriser, loadJevToken: { "test-token" })
     model.demo = true
     defer { model.setAppActive(false); model.signOut() }

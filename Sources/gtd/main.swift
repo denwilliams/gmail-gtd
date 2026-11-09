@@ -6,19 +6,19 @@ gtd: Gmail GTD from the terminal (add --demo for sample mail, no sign-in)
 
   gtd login [--client-id ID] [--client-secret S]   Sign in via browser
   gtd logout                                       Forget stored tokens
-  gtd setup                                        Create the GTD/* labels
-  gtd today                                        Next actions, waiting-for, inbox count
+  gtd setup                                        Create the 🚦 status labels and 🚦/In-tray
+  gtd today                                        Next actions, waiting-for, In-tray count
   gtd open <thread-id>                             Open a thread in Gmail
-  gtd inbox [N]                                    List inbox threads
-  gtd list <bucket> [N]                            List a bucket
+  gtd intray [N]                                   List In-tray threads (alias: inbox)
+  gtd list <status> [N]                            List a status
   gtd show <thread-id>                             Print a thread
-  gtd file <thread-id> <bucket>                    File into a bucket (Inbox placement follows bucket)
-  gtd done <thread-id>                             Mark a thread Done (moves it to GTD/Done)
-  gtd unfile <thread-id>                           Return to inbox
+  gtd file <thread-id> <status>                    File under a status (Inbox placement follows status)
+  gtd done <thread-id>                             Finished with it: files it as Reference
+  gtd unfile <thread-id>                           Return to the In-tray
   gtd suggest <thread-id>                          Local + optional Jev triage suggestions
-  gtd process [N]                                  Walk the inbox interactively
+  gtd process [N]                                  Walk the In-tray interactively
 
-Buckets: next, waiting, someday, reference, project, noise, done
+Statuses: next, waiting, someday, reference, project, noise, junk
 """
 
 func fail(_ message: String) -> Never {
@@ -39,7 +39,7 @@ func option(_ name: String, in args: [String]) -> String? {
 }
 
 func bucketArg(_ s: String?) -> GTDBucket {
-    guard let s, let b = GTDBucket(cliName: s) else { fail("Unknown bucket. Use: next, waiting, someday, reference, project, noise, done") }
+    guard let s, let b = GTDBucket(cliName: s) else { fail("Unknown status. Use: next, waiting, someday, reference, project, noise, junk") }
     return b
 }
 
@@ -111,9 +111,8 @@ func run() async throws {
         TokenStore.clear(); print("Signed out.")
     case "setup":
         let (_, labels) = try connect()
-        for (bucket, _) in try await labels.ensureLabels().sorted(by: { $0.key.rawValue < $1.key.rawValue }) {
-            print("✓ \(bucket.labelName)")
-        }
+        _ = try await labels.ensureLabels()
+        for name in [LabelManager.inTrayLabelName] + GTDBucket.allCases.map(\.labelName) { print("✓ \(name)") }
     case "bench":
         // Dev tool: is the on-device model faster with concurrent requests?
         let (client, _) = try connect()
@@ -143,7 +142,7 @@ func run() async throws {
         try await listThreads(labelID: ids[.nextAction]!, limit: 10, client: client)
         print("\nWaiting For")
         try await listThreads(labelID: ids[.waitingFor]!, limit: 10, client: client)
-        print("\nInbox: \(try await client.threadCount(labelID: "INBOX")) threads")
+        print("\nIn-tray: \(try await client.threadCount(labelID: labels.inTrayLabelID())) threads")
     case "open":
         guard let id = args.first else { fail(usage) }
         let email = try? await connect().0.emailAddress()
@@ -152,9 +151,9 @@ func run() async throws {
         p.executableURL = URL(filePath: "/usr/bin/open")
         p.arguments = [GmailLinks.thread(id, account: email).absoluteString]
         try p.run()
-    case "inbox":
-        let (client, _) = try connect()
-        try await listThreads(labelID: "INBOX", limit: args.first.flatMap(Int.init) ?? 20, client: client)
+    case "intray", "inbox":
+        let (client, labels) = try connect()
+        try await listThreads(labelID: labels.inTrayLabelID(), limit: args.first.flatMap(Int.init) ?? 20, client: client)
     case "list":
         let (client, labels) = try connect()
         let bucket = bucketArg(args.first)
@@ -171,12 +170,12 @@ func run() async throws {
         print("Filed → \(bucket.title)")
     case "done":
         guard let id = args.first else { fail(usage) }
-        try await connect().1.file(thread: id, into: .done)
-        print("Done.")
+        try await connect().1.file(thread: id, into: .reference)
+        print("Done: filed as Reference.")
     case "unfile":
         guard let id = args.first else { fail(usage) }
         try await connect().1.unfile(thread: id)
-        print("Back in inbox.")
+        print("Back in the In-tray.")
     case "suggest":
         guard let id = args.first else { fail(usage) }
         let client = try connect().0
@@ -189,10 +188,10 @@ func run() async throws {
     }
 }
 
-/// Interactive inbox processing: one thread at a time, with an AI suggestion.
+/// Interactive In-tray processing: one thread at a time, with an AI suggestion.
 func process(limit: Int) async throws {
     let (client, labels) = try connect()
-    let refs = try await client.listThreads(labelIDs: ["INBOX"], max: limit)
+    let refs = try await client.listThreads(labelIDs: [labels.inTrayLabelID()], max: limit)
     let myEmail = try? await client.emailAddress()
     for ref in refs {
         let thread = try await client.thread(ref.id, full: true)
@@ -204,7 +203,7 @@ func process(limit: Int) async throws {
         let approved = ApprovalPolicy.bucket(jevEnabled: settings.jevEnabled, local: output.local, jev: output.jev)
 
         while true {
-            print("\n[1]next [2]waiting [3]someday [4]ref [5]project [a]ccept [k]eep [q]uit > ", terminator: "")
+            print("\n[1]next [2]waiting [3]someday [4]ref [5]project [6]noise [7]junk [a]ccept [k]eep [q]uit > ", terminator: "")
             guard let input = readLine()?.trimmingCharacters(in: .whitespaces).lowercased() else { return }
             if input == "q" { return }
             if input == "k" || input.isEmpty { break }

@@ -10,19 +10,24 @@ func backlogFilingClearsQueueAndUndoRestoresExactArchivedLabels(bucket: GTDBucke
     let backlog = try await service.createLabel(LabelManager.backlogLabelName)
     let unrelated = try await service.createLabel("Keep me")
     let oldBucket: GTDBucket = bucket == .reference ? .noise : .reference
-    try await service.modifyThread("in01", add: [backlog.id, unrelated.id, "STARRED", ids[oldBucket]!], remove: ["INBOX"])
+    try await service.modifyThread("in01", add: [backlog.id, unrelated.id, "STARRED", ids[oldBucket]!],
+                                   remove: ["INBOX", DemoMailService.inTrayID])
     let before = try await service.thread("in01", full: true)
     let beforeLabels = try #require(before.messages?.last?.labelIds)
     let snapshot = try await manager.managedLabels(in: beforeLabels)
     #expect(snapshot == [backlog.id, ids[oldBucket]!])
-    #expect(await manager.bucket(for: [backlog.id]) == nil) // Not a GTD destination.
+    #expect(await manager.bucket(for: [backlog.id]) == nil) // Not a filing destination.
     let mappings: [Character: GTDBucket] = ["1": .nextAction, "2": .waitingFor, "3": .someday,
-                                           "4": .reference, "5": .project, "6": .noise, "7": .done]
+                                           "4": .reference, "5": .project, "6": .noise, "7": .junk]
     #expect(mappings[bucket.shortcut] == bucket)
 
     try await manager.file(thread: "in01", into: bucket)
     let after = try await service.thread("in01", full: true)
-    var expected: Set<String> = [unrelated.id, "STARRED", "UNREAD", ids[bucket]!]
+    // in01 also carries its Source and Classification labels, which filing leaves alone.
+    let facets = Set(try #require(before.messages?.last?.labelIds)).subtracting(snapshot)
+        .subtracting([unrelated.id, "STARRED", "UNREAD"])
+    #expect(!facets.isEmpty)
+    var expected: Set<String> = facets.union([unrelated.id, "STARRED", "UNREAD", ids[bucket]!])
     if [GTDBucket.nextAction, .waitingFor, .someday].contains(bucket) { expected.insert("INBOX") }
     #expect(after.messages?.allSatisfy { Set($0.labelIds ?? []) == expected } == true)
     #expect(try await service.listThreads(labelIDs: [backlog.id], max: 50).isEmpty)
@@ -41,16 +46,17 @@ func backlogFilingClearsQueueAndUndoRestoresExactArchivedLabels(bucket: GTDBucke
     let created = try await service.createLabel(LabelManager.backlogLabelName)
     #expect(try await manager.backlogLabelID() == created.id)
     #expect(try await service.threadCount(labelID: created.id) == 0)
-    #expect(try await service.threadCount(labelID: "INBOX") == 20)
+    #expect(try await service.threadCount(labelID: DemoMailService.inTrayID) == 20)
 }
 
 
-@Test func backlogLabelLivesUnderGTDAndAPlainBacklogLabelIsIgnored() async throws {
-    #expect(LabelManager.backlogLabelName == "GTD/Backlog")
+@Test func backlogLabelLivesUnderTrafficLightAndOtherBacklogLabelsAreIgnored() async throws {
+    #expect(LabelManager.backlogLabelName == "🚦/Backlog")
     let service = DemoMailService()
     let manager = LabelManager(client: service)
-    _ = try await service.createLabel("Backlog")                      // the old, un-nested name
+    _ = try await service.createLabel("Backlog")                      // un-nested
+    _ = try await service.createLabel("GTD/Backlog")                  // the retired GTD/ scheme
     #expect(try await manager.backlogLabelID() == nil)
-    let nested = try await service.createLabel("GTD/Backlog")
+    let nested = try await service.createLabel("🚦/Backlog")
     #expect(try await manager.backlogLabelID() == nested.id)
 }

@@ -19,14 +19,14 @@ struct DeNoiseView: View {
                 Button("LGTM") { model.approveDeNoiseBatch(batch.id) }
                     .buttonStyle(.borderedProminent)
                     .disabled(!model.canApproveDeNoiseBatch)
-                    .help("Move only the remaining reviewed emails to Noise and out of the inbox.")
+                    .help("Move only the remaining reviewed emails to Noise and out of the In-tray.")
             }
             .padding()
             DeNoiseThresholdControl().padding(.horizontal).padding(.bottom, 10)
             Divider()
             if batch.rows.isEmpty {
                 ContentUnavailableView("No Emails Left", systemImage: "checkmark.circle",
-                                       description: Text("All 10 emails were corrected. Exit to return to the inbox."))
+                                       description: Text("All 10 emails were corrected. Exit to return to the In-tray."))
             } else {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 6) {

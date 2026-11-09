@@ -68,14 +68,38 @@ public struct GmailAuth: Sendable {
 
     /// Runs the browser sign-in. `openURL` is called with the consent URL (NSWorkspace in the app, `open` in the CLI).
     public func signIn(openURL: @Sendable (URL) -> Void) async throws -> Tokens {
-        let verifier = Self.randomString(64)
-        let challenge = Data(SHA256.hash(data: Data(verifier.utf8))).base64URL
-        let state = Self.randomString(16)
-
         let server = LoopbackServer()
         let port = try await server.start()
         let redirect = "http://127.0.0.1:\(port)"
+        return try await exchange(redirect: redirect) { url in
+            openURL(url)
+            return try await server.waitForCallback()
+        }
+    }
 
+    /// The iOS flow: Google's iOS clients redirect to the reversed client ID scheme, which
+    /// `ASWebAuthenticationSession` (or any caller) captures and hands back as `callback`.
+    public var iOSRedirect: String { "\(Self.reversed(config.clientID)):/oauthredirect" }
+    public var iOSCallbackScheme: String { Self.reversed(config.clientID) }
+
+    /// Runs the consent page through `authorize`, which returns the URL Google redirected to.
+    public func signIn(redirect: String, authorize: @Sendable (URL) async throws -> URL) async throws -> Tokens {
+        return try await exchange(redirect: redirect) { url in
+            let callback = try await authorize(url)
+            let items = URLComponents(url: callback, resolvingAgainstBaseURL: false)?.queryItems ?? []
+            return Dictionary(items.compactMap { i in i.value.map { (i.name, $0) } }, uniquingKeysWith: { a, _ in a })
+        }
+    }
+
+    /// "123-abc.apps.googleusercontent.com" → "com.googleusercontent.apps.123-abc".
+    static func reversed(_ clientID: String) -> String {
+        clientID.split(separator: ".").reversed().joined(separator: ".")
+    }
+
+    private func exchange(redirect: String, callback: @Sendable (URL) async throws -> [String: String]) async throws -> Tokens {
+        let verifier = Self.randomString(64)
+        let challenge = Data(SHA256.hash(data: Data(verifier.utf8))).base64URL
+        let state = Self.randomString(16)
         var comps = URLComponents(string: "https://accounts.google.com/o/oauth2/v2/auth")!
         comps.queryItems = [
             .init(name: "client_id", value: config.clientID),
@@ -88,9 +112,7 @@ public struct GmailAuth: Sendable {
             .init(name: "access_type", value: "offline"),
             .init(name: "prompt", value: "consent"),
         ]
-        openURL(comps.url!)
-
-        let params = try await server.waitForCallback()
+        let params = try await callback(comps.url!)
         guard params["state"] == state else { throw GmailError.auth("state mismatch") }
         if let err = params["error"] { throw GmailError.auth(err) }
         guard let code = params["code"] else { throw GmailError.auth("no code returned") }

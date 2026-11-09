@@ -108,11 +108,22 @@ public struct Triager: Sendable {
 
     public init() {}
 
+    /// Why the model can't run, in words a person can act on.
+    static func reason(_ availability: SystemLanguageModel.Availability) -> String {
+        guard case .unavailable(let why) = availability else { return "not ready" }
+        switch why {
+        case .appleIntelligenceNotEnabled: return "turn on Apple Intelligence in Settings."
+        case .deviceNotEligible: return "this device doesn't support Apple Intelligence."
+        case .modelNotReady: return "Apple Intelligence is still downloading. Try again later."
+        @unknown default: return String(describing: why)
+        }
+    }
+
     public func suggest(for thread: GmailThread, me: String? = nil, prompt: String = TriagePrompts.local) async throws -> TriageSuggestion {
         try TriagePrompts.validate(prompt, maxBytes: TriagePrompts.localMaxBytes, source: "Local")
         let model = SystemLanguageModel.default
         guard case .available = model.availability else {
-            throw TriageError.modelUnavailable(String(describing: model.availability))
+            throw TriageError.modelUnavailable(Triager.reason(model.availability))
         }
         // Two independent requests, run together: the pair finishes in roughly 1.2x one request, not 2x.
         async let classification = Self.classify(thread, me: me, instructions: prompt)
@@ -146,7 +157,7 @@ public struct Triager: Sendable {
     public func digest(nextActions: [String], waitingFor: [String]) async throws -> String {
         let model = SystemLanguageModel.default
         guard case .available = model.availability else {
-            throw TriageError.modelUnavailable(String(describing: model.availability))
+            throw TriageError.modelUnavailable(Triager.reason(model.availability))
         }
         let session = LanguageModelSession(instructions: "You write a two-sentence morning briefing for someone using Getting Things Done. Plain, direct, no greeting.")
         let list = { (items: [String]) in items.prefix(12).map { "- \($0.prefix(120))" }.joined(separator: "\n") }
@@ -158,7 +169,7 @@ public struct Triager: Sendable {
     public func plan(for thread: GmailThread) async throws -> ProjectPlan {
         let model = SystemLanguageModel.default
         guard case .available = model.availability else {
-            throw TriageError.modelUnavailable(String(describing: model.availability))
+            throw TriageError.modelUnavailable(Triager.reason(model.availability))
         }
         let session = LanguageModelSession(instructions: "You break email projects into concrete steps for someone using Getting Things Done.")
         let r = try await session.respond(to: Self.prompt(for: thread), generating: GeneratedPlan.self, options: Self.deterministic)

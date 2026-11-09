@@ -6,16 +6,16 @@ enum DemoData {
 
     private static func t(_ id: String, inbox: Bool = false, bucket: GTDBucket? = nil, unread: Bool = false,
                           _ messages: [DemoMessage]) -> DemoThreadSeed {
-        DemoThreadSeed(id: id, inbox: inbox, bucket: bucket, unread: unread, messages: messages)
+        DemoThreadSeed(id: id, inbox: inbox, bucket: bucket, unread: unread, labels: facets[id] ?? [], messages: messages)
     }
 
     private static func m(_ from: String, _ hoursAgo: Double, subject: String? = nil, bulk: Bool = false, _ body: String) -> DemoMessage {
         DemoMessage(from: from, hoursAgo: hoursAgo, body: body, subject: subject, bulk: bulk)
     }
 
-    static let threads: [DemoThreadSeed] = inbox + nextActions + waitingFor + projects + someday + reference + noise + done
+    static let threads: [DemoThreadSeed] = inbox + nextActions + waitingFor + projects + someday + reference + noise + junk + finished
 
-    // MARK: Inbox (unprocessed)
+    // MARK: In-tray (unprocessed)
 
     private static let inbox: [DemoThreadSeed] = [
         t("in01", inbox: true, unread: true, [m("Priya Nair <priya@brightfield.example>", 2, subject: "Q4 pricing deck: can you review by Thursday?",
@@ -144,15 +144,76 @@ enum DemoData {
             "We're making some changes to our terms and privacy policy, effective next month. You don't need to do anything. Continued use of the service means you accept the changes.")]),
     ]
 
-    // MARK: Done
+    // MARK: Junk
 
-    private static let done: [DemoThreadSeed] = [
-        t("dn01", bucket: .done, [
+    private static let junk: [DemoThreadSeed] = [
+        t("jk01", bucket: .junk, [m("Prize Desk <winner@lucky-draw.example>", 260, subject: "You have been selected!!!", bulk: true,
+            "Congratulations, you have been selected to receive a $1,000 gift card. Click within 24 hours to claim your reward.")]),
+    ]
+
+    // MARK: Finished (filed as Reference)
+
+    private static let finished: [DemoThreadSeed] = [
+        t("dn01", bucket: .reference, [
             m("Sam Okafor <sam@brightfield.example>", 700, subject: "Catering confirmed for the all-hands", "Catering is booked for the 14th: sandwiches and fruit for 40, delivered at 11:30. Invoice to follow."),
             m(me, 690, "Perfect, thanks Sam. All sorted on my side.")]),
-        t("dn02", bucket: .done, [m("Accounts Payable <ap@brightfield.example>", 650, subject: "Expense report approved", "Your September expense report has been approved and will be paid with the next run on Friday.")]),
-        t("dn03", bucket: .done, [
+        t("dn02", bucket: .reference, [m("Accounts Payable <ap@brightfield.example>", 650, subject: "Expense report approved", "Your September expense report has been approved and will be paid with the next run on Friday.")]),
+        t("dn03", bucket: .reference, [
             m(me, 900, subject: "Signed services agreement", "Hi Dana, the signed agreement is attached. Thanks for turning the redlines around so quickly."),
             m("Dana Whitfield <dana@whitfieldlaw.example>", 880, "Received, thank you. Countersigned copy to follow.")]),
+    ]
+
+    // MARK: Labels
+
+    /// The 🗂️ Classification, 🏢 Source, 🏷️ Tag and 🎯 Project labels in the demo mailbox.
+    static let facetLabelNames: [String] = [
+        "🗂️/Personal", "🗂️/Calendar", "🗂️/Outreach", "🗂️/Newsletters", "🗂️/Notifications", "🗂️/Security", "🗂️/Receipts", "🗂️/Bills",
+        "🏢/Internal", "🏢/Vendor", "🏢/Candidate", "🏢/CloudHarbor", "🏢/BuildLane", "🏢/SkyPath",
+        "🏷️/Hiring", "🏷️/Offsite", "🏷️/Legal",
+        "🎯/Website Redesign", "🎯/Billing Migration",
+    ]
+
+    /// Facet labels per thread, as Gmail filters (or Dennis) would have applied them. Some threads are left
+    /// without a Source or Classification on purpose, to show the None filter.
+    static let facets: [String: [String]] = [
+        "in01": ["🗂️/Personal", "🏢/Internal"],
+        "in02": ["🗂️/Personal", "🏢/Internal", "🏷️/Offsite"],
+        "in03": ["🗂️/Bills", "🏢/CloudHarbor"],
+        "in04": ["🗂️/Newsletters"],
+        "in05": ["🗂️/Personal"],
+        "in06": ["🗂️/Notifications", "🏢/Internal"],
+        "in07": ["🗂️/Personal", "🏢/Vendor", "🏷️/Legal"],
+        "in08": ["🗂️/Notifications", "🏢/BuildLane"],
+        "in09": ["🗂️/Personal", "🏢/Internal"],
+        "in10": ["🗂️/Receipts", "🏢/SkyPath"],
+        "in11": ["🗂️/Personal"],
+        "in12": ["🗂️/Bills", "🏢/Internal"],
+        "in13": ["🗂️/Notifications", "🏢/Internal"],
+        "in14": ["🗂️/Security", "🏢/CloudHarbor"],
+        "in15": ["🗂️/Personal", "🎯/Website Redesign"],
+        "in16": ["🗂️/Personal"],
+        "in17": ["🗂️/Notifications", "🏢/Internal"],
+        "in18": ["🗂️/Personal"],
+        "in19": ["🗂️/Outreach", "🏢/Vendor", "🏷️/Hiring"],
+        "in20": ["🗂️/Personal", "🏢/Internal"],
+        "na01": ["🗂️/Personal", "🏢/Internal", "🏷️/Hiring"],
+        "na02": ["🗂️/Personal", "🏢/Vendor", "🏷️/Legal"],
+        "na04": ["🗂️/Personal", "🏢/Internal"],
+        "wf01": ["🗂️/Personal", "🏢/Vendor", "🏷️/Offsite"],
+        "wf02": ["🗂️/Personal", "🏢/Internal", "🎯/Website Redesign"],
+        "wf03": ["🗂️/Notifications", "🏢/Internal"],
+        "wf04": ["🗂️/Personal", "🏢/Candidate", "🏷️/Hiring"],
+        "pr01": ["🗂️/Personal", "🏢/Internal", "🎯/Website Redesign"],
+        "pr02": ["🗂️/Personal", "🏢/Internal", "🏷️/Offsite"],
+        "pr03": ["🗂️/Personal", "🏢/Internal", "🎯/Billing Migration"],
+        "pr04": ["🗂️/Personal", "🏢/Internal", "🏷️/Hiring"],
+        "rf02": ["🗂️/Receipts", "🏢/Vendor"],
+        "rf03": ["🗂️/Notifications", "🏢/Internal"],
+        "nz01": ["🗂️/Newsletters"],
+        "nz02": ["🗂️/Newsletters"],
+        "nz03": ["🗂️/Notifications"],
+        "dn01": ["🗂️/Personal", "🏢/Internal"],
+        "dn02": ["🗂️/Notifications", "🏢/Internal"],
+        "dn03": ["🗂️/Personal", "🏢/Vendor", "🏷️/Legal"],
     ]
 }

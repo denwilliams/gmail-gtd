@@ -19,15 +19,25 @@ public actor DemoMailService: MailService {
             GmailLabel(id: "INBOX", name: "INBOX", type: "system"),
             GmailLabel(id: "UNREAD", name: "UNREAD", type: "system"),
         ]
-        // Pre-create the GTD labels so seed threads can be filed under them.
+        // Pre-create the status labels so seed threads can be filed under them, plus the facet labels
+        // Gmail filters would normally apply. Backlog is left for the user to create, as in a real mailbox.
         for bucket in GTDBucket.allCases {
             labelList.append(GmailLabel(id: Self.labelID(bucket), name: bucket.labelName, type: "user"))
         }
+        labelList.append(GmailLabel(id: Self.inTrayID, name: LabelManager.inTrayLabelName, type: "user"))
+        for (i, name) in DemoData.facetLabelNames.enumerated() {
+            labelList.append(GmailLabel(id: "Label_f\(i)", name: name, type: "user"))
+        }
+        let ids = Dictionary(uniqueKeysWithValues: labelList.map { ($0.name, $0.id) })
         for seed in DemoData.threads {
             var labels: Set<String> = []
-            if seed.inbox { labels.insert("INBOX") }
-            if let bucket = seed.bucket { labels.insert(Self.labelID(bucket)) }
+            if seed.inbox { labels.formUnion(["INBOX", Self.inTrayID]) }
+            if let bucket = seed.bucket {
+                labels.insert(Self.labelID(bucket))
+                if bucket.keepsInInbox { labels.insert("INBOX") }
+            }
             if seed.unread { labels.insert("UNREAD") }
+            labels.formUnion(seed.labels.compactMap { ids[$0] })
             threads[seed.id] = Stored(id: seed.id, labels: labels, messages: seed.messages)
         }
         self.now = now
@@ -36,13 +46,21 @@ public actor DemoMailService: MailService {
     private let now: Date
 
     static func labelID(_ bucket: GTDBucket) -> String { "Label_\(bucket.rawValue)" }
+    static let inTrayID = "Label_inTray"
 
     // MARK: - MailService
 
-    /// Pages by offset: the token is the index of the next thread.
+    /// Pages by offset: the token is the index of the next thread. Understands the label groups the app's
+    /// filters produce (`{label:"a" label:"b"}` and `-{…}`); other query text is ignored.
     public func listThreadPage(labelIDs: [String], query: String?, max: Int, pageToken: String?) async throws -> ThreadPage {
+        let groups = query.map(Self.labelGroups) ?? []
+        let names = Dictionary(uniqueKeysWithValues: labelList.map { ($0.id, LabelFacet.normalised($0.name)) })
         let all = threads.values
             .filter { t in labelIDs.allSatisfy(t.labels.contains) }
+            .filter { t in
+                let have = Set(t.labels.compactMap { names[$0] })
+                return groups.allSatisfy { group in group.negated == have.isDisjoint(with: group.names) }
+            }
             .sorted { $0.messages.last!.hoursAgo < $1.messages.last!.hoursAgo }
         let start = pageToken.flatMap(Int.init) ?? 0
         let slice = all.dropFirst(start).prefix(max)
@@ -93,6 +111,14 @@ public actor DemoMailService: MailService {
         return GmailThread(id: t.id, historyId: nil, messages: messages)
     }
 
+    /// `-{label:"a" label:"b"}` → (negated: true, names: [a, b]).
+    static func labelGroups(in query: String) -> [(negated: Bool, names: Set<String>)] {
+        query.matches(of: /(-?)\{([^}]*)\}/).map { group in
+            let names = String(group.2).matches(of: /label:"([^"]*)"/).map { LabelFacet.normalised(String($0.1)) }
+            return (!group.1.isEmpty, Set(names))
+        }
+    }
+
     private static func snippet(_ body: String) -> String {
         String(body.replacingOccurrences(of: "\n", with: " ").prefix(110))
     }
@@ -111,5 +137,7 @@ struct DemoThreadSeed {
     let inbox: Bool
     let bucket: GTDBucket?
     let unread: Bool
+    /// Facet label names (`🏢/Internal`), resolved to IDs when the mailbox is built.
+    let labels: [String]
     let messages: [DemoMessage]
 }

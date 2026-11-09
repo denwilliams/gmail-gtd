@@ -55,7 +55,7 @@ private actor CorrectionMail: MailService {
         guard let jev else { throw CorrectionTestError.unavailable }
         return JevClassification(bucket: jev)
     })
-    let model = AppModel(signedIn: true, settings: settings, folder: .inbox,
+    let model = AppModel(signedIn: true, settings: settings, folder: .inTray,
                          categoriser: categoriser, loadJevToken: { "mock-token" })
     model.demo = true // Never touch real credentials or persist private mail.
     await model.connect(using: mail, persist: false)
@@ -200,6 +200,6 @@ private actor CorrectionMail: MailService {
     model.signOut()
     await mail.release()
     try await correctionEventually { originStore.records.count == 1 }
-    #expect(originStore.records.first?.chosenBucket == .done)
+    #expect(originStore.records.first?.chosenBucket == .reference)
     #expect(model.corrections.records.isEmpty)
 }

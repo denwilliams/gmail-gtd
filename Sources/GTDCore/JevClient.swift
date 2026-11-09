@@ -77,7 +77,7 @@ public struct JevClient: Sendable {
             "reference": "Useful information worth keeping, with no action required.",
             "project": "An outcome requiring multiple separate steps over time.",
             "noise": "Bulk marketing, newsletters, promotions or unhelpful automated notices.",
-            "done": "A completed task needing no further action."
+            "junk": "Spam, scams or unsolicited mail not worth reading at all."
         ]
         let questions = ["bucket": Question(instructions: prompt, criteria: criteria)]
         let encoder = JSONEncoder()
