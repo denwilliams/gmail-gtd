@@ -162,6 +162,21 @@ sign-in screen. Google's page opens in
 a sign-in sheet and returns to the app on the reversed client ID scheme. A free Apple ID can install on your own
 phone, but the app stops opening after 7 days until you run it from Xcode again; a paid developer account avoids that.
 
+### Installing with AltStore
+
+Without Xcode, install it with [AltStore](https://altstore.io) (AltStore Classic; it signs the app with your own
+Apple ID and refreshes it before the 7 days run out). In AltStore, Sources → + and add:
+
+```
+https://github.com/denwilliams/gmail-gtd/releases/latest/download/source.json
+```
+
+To publish a version, push a tag like `ios-v1.1` (or run the **iPhone release** workflow): it builds an unsigned
+`.ipa` with `make ios-ipa`, makes a GitHub release, and attaches the `.ipa` and that source. `make ios-ipa VERSION=1.1`
+builds the same `.ipa` locally, in `build/GmailGTD.ipa`, without touching your signed Xcode project. AltStore may
+change the bundle ID when it signs; if Google's sign-in refuses the iOS client, set the client's bundle ID to the one
+AltStore shows.
+
 Debug builds accept `--route intray` (or `today`, `next`, …) and `--route intray/thread` to open a screen at launch.
 
 ## Optional Jev and custom categorisation prompts

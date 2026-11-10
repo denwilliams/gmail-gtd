@@ -1,0 +1,41 @@
+# Publishes the iPhone app for AltStore. Push a tag like ios-v1.1 and this builds an unsigned .ipa, makes a GitHub
+# release for it, and attaches the .ipa and the AltStore source (source.json). The source's address stays
+# https://github.com/denwilliams/gmail-gtd/releases/latest/download/source.json
+name: iPhone release
+on:
+  push:
+    tags: ["ios-v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version, e.g. 1.1 (tagged ios-v<version>)"
+        required: true
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Version
+        id: v
+        run: |
+          if [ -n "${{ github.event.inputs.version }}" ]; then v="${{ github.event.inputs.version }}"; else v="${GITHUB_REF_NAME#ios-v}"; fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "tag=ios-v$v" >> "$GITHUB_OUTPUT"
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Build the .ipa
+        run: ./scripts/make-ipa.sh "${{ steps.v.outputs.version }}" "${{ github.run_number }}"
+      - name: Write the AltStore source
+        run: |
+          ./scripts/altstore-source.py "${{ steps.v.outputs.version }}" "${{ github.run_number }}" build/GmailGTD.ipa \
+            "https://github.com/${{ github.repository }}/releases/download/${{ steps.v.outputs.tag }}/GmailGTD.ipa"
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ steps.v.outputs.tag }}" build/GmailGTD.ipa build/source.json \
+            --target "${{ github.sha }}" --title "iPhone ${{ steps.v.outputs.version }}" --latest \
+            --notes "Add the AltStore source: https://github.com/${{ github.repository }}/releases/latest/download/source.json"

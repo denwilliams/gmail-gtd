@@ -9,7 +9,7 @@ APP   := build/GmailGTD.app
 OPEN  ?= 1
 
 .DEFAULT_GOAL := app
-.PHONY: app debug install run demo test clean help ios-project ios-sim ios-device ios-signing ios-icon
+.PHONY: app debug install run demo test clean help ios-project ios-sim ios-device ios-signing ios-icon ios-ipa
 
 app: ## Build build/GmailGTD.app (release)
 	./scripts/make-app.sh release
@@ -68,6 +68,9 @@ ios-sim: ios-project ## Build the iPhone app and run it in the simulator on the 
 	open -b com.apple.iphonesimulator 2>/dev/null || echo "Simulator app not found: the app still runs; take screenshots with xcrun simctl io booted screenshot"
 	xcrun simctl install "$(IOS_SIM)" "$(IOS_DD)/Build/Products/Debug-iphonesimulator/Gmail GTD.app"
 	xcrun simctl launch "$(IOS_SIM)" $(GMAIL_GTD_BUNDLE_ID) --demo
+
+ios-ipa: ## Build an unsigned build/GmailGTD.ipa for AltStore (VERSION=1.0 BUILD=1)
+	./scripts/make-ipa.sh $(or $(VERSION),1.0) $(or $(BUILD),1)
 
 ios-device: ios-project ## Open the iOS project in Xcode to run on your iPhone (save your team first: make ios-signing TEAM=…)
 	open iOS/GmailGTDiOS.xcodeproj
