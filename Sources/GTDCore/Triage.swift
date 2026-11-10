@@ -44,9 +44,12 @@ public struct ProjectPlan: Sendable, Codable {
 
 public enum TriageError: Error, LocalizedError {
     case modelUnavailable(String)
+    case failed(String)
     public var errorDescription: String? {
-        if case .modelUnavailable(let why) = self { return "On-device model unavailable: \(why)" }
-        return nil
+        switch self {
+        case .modelUnavailable(let why): "On-device model unavailable: \(why)"
+        case .failed(let message): message
+        }
     }
 }
 
@@ -108,6 +111,25 @@ public struct Triager: Sendable {
 
     public init() {}
 
+    /// Runs a model request, turning the framework's errors into a sentence a person can read.
+    static func readable<T>(_ request: () async throws -> T) async throws -> T {
+        do { return try await request() }
+        catch let error as LanguageModelSession.GenerationError {
+            let why = switch error {
+            case .exceededContextWindowSize: "the thread is too long for the on-device model."
+            case .guardrailViolation, .refusal: "the on-device model declined this thread."
+            case .unsupportedLanguageOrLocale: "the on-device model doesn't support this language."
+            case .assetsUnavailable: "Apple Intelligence isn't ready yet. Try again later."
+            case .rateLimited, .concurrentRequests: "the on-device model is busy. Try again shortly."
+            default: "the on-device model couldn't read this thread."
+            }
+            throw TriageError.failed("Couldn\u{2019}t summarise: \(why)")
+        } catch let error as NSError where error.domain.hasPrefix("FoundationModels") {
+            // Some failures arrive bridged, without a case to match (seen as "GenerationError error -1").
+            throw TriageError.failed("Couldn\u{2019}t summarise: the on-device model couldn\u{2019}t read this thread.")
+        }
+    }
+
     /// Why the model can't run, in words a person can act on.
     static func reason(_ availability: SystemLanguageModel.Availability) -> String {
         guard case .unavailable(let why) = availability else { return "not ready" }
@@ -140,7 +162,7 @@ public struct Triager: Sendable {
 
     private static func classify(_ thread: GmailThread, me: String?, instructions: String) async throws -> GeneratedTriage {
         let session = LanguageModelSession(instructions: instructions)
-        return try await session.respond(to: prompt(for: thread, me: me), generating: GeneratedTriage.self, options: deterministic).content
+        return try await readable { try await session.respond(to: prompt(for: thread, me: me), generating: GeneratedTriage.self, options: deterministic).content }
     }
 
     private static func summarise(_ thread: GmailThread, me: String?) async throws -> String {
@@ -151,7 +173,7 @@ public struct Triager: Sendable {
             the text. Describe what the email says; do not give advice and do not say whether anything needs doing.
             """)
         let prompt = "Summarise this email thread (newest message first).\n\n" + transcript(for: thread, me: me)
-        return try await session.respond(to: prompt, generating: GeneratedSummary.self, options: deterministic).content.summary
+        return try await readable { try await session.respond(to: prompt, generating: GeneratedSummary.self, options: deterministic).content.summary }
     }
 
     public func digest(nextActions: [String], waitingFor: [String]) async throws -> String {
@@ -162,7 +184,7 @@ public struct Triager: Sendable {
         let session = LanguageModelSession(instructions: "You write a two-sentence morning briefing for someone using Getting Things Done. Plain, direct, no greeting.")
         let list = { (items: [String]) in items.prefix(12).map { "- \($0.prefix(120))" }.joined(separator: "\n") }
         let prompt = "Next actions:\n\(list(nextActions))\n\nWaiting for:\n\(list(waitingFor))\n\nBriefing:"
-        return try await session.respond(to: prompt).content
+        return try await Self.readable { try await session.respond(to: prompt).content }
     }
 
     /// Summary and concrete steps for a project thread.
@@ -172,7 +194,7 @@ public struct Triager: Sendable {
             throw TriageError.modelUnavailable(Triager.reason(model.availability))
         }
         let session = LanguageModelSession(instructions: "You break email projects into concrete steps for someone using Getting Things Done.")
-        let r = try await session.respond(to: Self.prompt(for: thread), generating: GeneratedPlan.self, options: Self.deterministic)
+        let r = try await Self.readable { try await session.respond(to: Self.prompt(for: thread), generating: GeneratedPlan.self, options: Self.deterministic) }
         return ProjectPlan(summary: r.content.summary, steps: r.content.steps)
     }
 
