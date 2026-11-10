@@ -25,7 +25,11 @@ struct RootView: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
-        if model.signedIn { MailNavigation() } else { SignInScreen() }
+        @Bindable var model = model
+        Group {
+            if model.signedIn { MailNavigation() } else { SignInScreen() }
+        }
+        .sheet(item: $model.gmailPage) { page in SafariSheet(url: page.url).ignoresSafeArea() }
     }
 }
 

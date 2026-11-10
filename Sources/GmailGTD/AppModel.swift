@@ -1314,7 +1314,18 @@ final class AppModel {
 
     // MARK: - Gmail links
 
-    func openInGmail(_ threadID: String) { open(GmailLinks.thread(threadID, account: email)) }
+    /// On iPhone a thread opens in a Safari sheet over the app (`gmailPage`), not in Safari itself.
+    func openInGmail(_ threadID: String) {
+        let url = GmailLinks.thread(threadID, account: email)
+        #if os(iOS)
+        if demo { notice = "Demo mode: this would open \(url.absoluteString)" } else { gmailPage = GmailPage(url: url) }
+        #else
+        open(url)
+        #endif
+    }
+
+    /// The Gmail web page shown in a sheet on iPhone.
+    var gmailPage: GmailPage?
 
     func openGmail() { open(GmailLinks.inbox(account: email), app: GmailLinks.appInbox) }
 
@@ -1331,4 +1342,9 @@ final class AppModel {
             #endif
         }
     }
+}
+
+struct GmailPage: Identifiable {
+    let url: URL
+    var id: URL { url }
 }
