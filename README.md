@@ -147,11 +147,18 @@ turned on. Mail refreshes when the app opens and every ten minutes while it is o
 ```sh
 brew install xcodegen      # once: the Xcode project is generated from iOS/project.yml
 make ios-sim               # build and run in the simulator on the demo mailbox
-make ios-device            # open the project in Xcode; choose your team under Signing, then run on your iPhone
+make ios-device            # open the project in Xcode, then run it on your iPhone (⌘R)
+make ios-signing           # once, after choosing your team in Xcode: keep it (see below)
 ```
 
+The Xcode project is regenerated from `iOS/project.yml` by every `make ios-…`, which would drop the team you chose in
+Xcode's Signing & Capabilities tab. After choosing it (and changing the bundle ID there, if Xcode says it's taken), run
+`make ios-signing`: it reads both from the project and saves them in `iOS/signing.env` (not committed), and every
+later `make ios-…` uses them. You can also pass them directly: `make ios-signing TEAM=XXXXXXXXXX BUNDLE_ID=…`.
+
 Sign-in needs an OAuth client of type **iOS** (the Mac's Desktop client won't work) in the same Google Cloud
-project, with bundle ID `dev.denw.gmail-gtd.ios`. Paste its client ID on the sign-in screen. Google's page opens in
+project, with the app's bundle ID (`dev.denw.gmail-gtd.ios` unless you saved another). Paste its client ID on the
+sign-in screen. Google's page opens in
 a sign-in sheet and returns to the app on the reversed client ID scheme. A free Apple ID can install on your own
 phone, but the app stops opening after 7 days until you run it from Xcode again; a paid developer account avoids that.
 

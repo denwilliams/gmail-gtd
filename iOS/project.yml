@@ -1,5 +1,6 @@
 # The iPhone app. Generate the Xcode project with `make ios-project` (needs XcodeGen: `brew install xcodegen`).
-# The project file is not committed; this file is the source of truth.
+# The project file is not committed; this file is the source of truth. Always generate through `make`: it fills in
+# ${GMAIL_GTD_TEAM} and ${GMAIL_GTD_BUNDLE_ID} from iOS/signing.env, so your signing team survives regenerating.
 name: GmailGTDiOS
 options:
   bundleIdPrefix: dev.denw
@@ -32,7 +33,7 @@ targets:
     settings:
       base:
         PRODUCT_NAME: Gmail GTD
-        PRODUCT_BUNDLE_IDENTIFIER: dev.denw.gmail-gtd.ios
+        PRODUCT_BUNDLE_IDENTIFIER: "${GMAIL_GTD_BUNDLE_ID}"
         TARGETED_DEVICE_FAMILY: "1"
         SWIFT_VERSION: "6.0"
         GENERATE_INFOPLIST_FILE: YES
@@ -43,5 +44,5 @@ targets:
         MARKETING_VERSION: "1.0"
         CURRENT_PROJECT_VERSION: "1"
         CODE_SIGN_STYLE: Automatic
-        # Set your team to run on a device: `make ios-device TEAM=XXXXXXXXXX`, or pick it in Xcode.
-        DEVELOPMENT_TEAM: ""
+        # Your signing team, saved by `make ios-signing TEAM=XXXXXXXXXX`.
+        DEVELOPMENT_TEAM: "${GMAIL_GTD_TEAM}"
