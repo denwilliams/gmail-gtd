@@ -1316,11 +1316,11 @@ final class AppModel {
 
     /// On iPhone a thread opens in a Safari sheet over the app (`gmailPage`), not in Safari itself.
     func openInGmail(_ threadID: String) {
-        let url = GmailLinks.thread(threadID, account: email)
         #if os(iOS)
+        let url = GmailLinks.mobileThread(threadID, account: email)
         if demo { notice = "Demo mode: this would open \(url.absoluteString)" } else { gmailPage = GmailPage(url: url) }
         #else
-        open(url)
+        open(GmailLinks.thread(threadID, account: email))
         #endif
     }
 

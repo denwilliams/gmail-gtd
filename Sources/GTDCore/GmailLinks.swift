@@ -9,6 +9,15 @@ public enum GmailLinks {
         return comps.url!
     }
 
+    /// The same thread in Gmail's phone web UI. Phone browsers are sent there, and it drops the desktop `#all/<id>`
+    /// route, landing on the mailbox. All Mail, so archived threads open too. (Undocumented, like the desktop route.)
+    public static func mobileThread(_ id: String, account email: String?) -> URL {
+        var comps = URLComponents(string: "https://mail.google.com/mail/mu/mp/")!
+        if let email { comps.queryItems = [.init(name: "authuser", value: email)] }
+        comps.fragment = "cv/All Mail/\(id)"
+        return comps.url!
+    }
+
     public static func inbox(account email: String?) -> URL {
         var comps = URLComponents(string: "https://mail.google.com/mail/")!
         if let email { comps.queryItems = [.init(name: "authuser", value: email)] }
