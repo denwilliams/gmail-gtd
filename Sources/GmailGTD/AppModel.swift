@@ -1314,16 +1314,22 @@ final class AppModel {
 
     // MARK: - Gmail links
 
-    func openInGmail(_ threadID: String) { open(GmailLinks.thread(threadID, account: email)) }
+    func openInGmail(_ threadID: String) {
+        open(GmailLinks.thread(threadID, account: email), app: GmailLinks.appThread(threadID))
+    }
 
-    func openGmail() { open(GmailLinks.inbox(account: email)) }
+    func openGmail() { open(GmailLinks.inbox(account: email), app: GmailLinks.appInbox) }
 
-    private func open(_ url: URL) {
+    /// On iPhone, the Gmail app when it's installed (`app`), else the web page.
+    private func open(_ url: URL, app: URL? = nil) {
         if demo { notice = "Demo mode: this would open \(url.absoluteString)" } else {
             #if os(macOS)
             NSWorkspace.shared.open(url)
             #else
-            UIApplication.shared.open(url)
+            guard let app else { UIApplication.shared.open(url); return }
+            UIApplication.shared.open(app) { opened in
+                if !opened { UIApplication.shared.open(url) }
+            }
             #endif
         }
     }

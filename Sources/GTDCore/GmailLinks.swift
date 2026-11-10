@@ -15,4 +15,10 @@ public enum GmailLinks {
         comps.fragment = "inbox"
         return comps.url!
     }
+
+    /// The Gmail iOS app's own scheme: web links open Safari, not the app. The thread form is undocumented (it's the
+    /// one the app itself uses); the app opens on whichever account it last showed.
+    public static func appThread(_ id: String) -> URL { URL(string: "googlegmail:///cv=\(id)/accountId=1")! }
+
+    public static var appInbox: URL { URL(string: "googlegmail://")! }
 }
