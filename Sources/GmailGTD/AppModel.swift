@@ -1314,15 +1314,11 @@ final class AppModel {
 
     // MARK: - Gmail links
 
-    /// On iPhone a thread opens in the Gmail app, or without it in a Safari sheet over this app (`gmailPage`).
+    /// On iPhone a thread opens in a Safari sheet over the app (`gmailPage`), not in Safari itself.
     func openInGmail(_ threadID: String) {
         #if os(iOS)
         let url = GmailLinks.mobileThread(threadID, account: email)
-        if demo { notice = "Demo mode: this would open \(url.absoluteString)"; return }
-        // The Gmail app when it's installed, else the web page in a sheet.
-        UIApplication.shared.open(GmailLinks.appThread(threadID)) { [weak self] opened in
-            if !opened { self?.gmailPage = GmailPage(url: url) }
-        }
+        if demo { notice = "Demo mode: this would open \(url.absoluteString)" } else { gmailPage = GmailPage(url: url) }
         #else
         open(GmailLinks.thread(threadID, account: email))
         #endif
