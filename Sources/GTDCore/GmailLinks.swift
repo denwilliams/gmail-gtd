@@ -25,7 +25,14 @@ public enum GmailLinks {
         return comps.url!
     }
 
-    /// The Gmail iOS app (web links open Safari, not the app). It has no documented link to a thread, and opens on
-    /// whichever account it last showed, so threads stay on the web link, which names the account.
+    /// A thread in the Gmail iOS app (web links open Safari, not the app). Undocumented, and it can't name the
+    /// account: the app looks in whichever account it last showed.
+    public static func appThread(_ id: String) -> URL {
+        var comps = URLComponents(string: "googlegmail:///thread")!
+        comps.queryItems = [.init(name: "th", value: id)]
+        return comps.url!
+    }
+
+    /// The Gmail iOS app, on whichever account it last showed.
     public static var appInbox: URL { URL(string: "googlegmail://")! }
 }
