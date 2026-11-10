@@ -48,6 +48,8 @@ import Foundation
     #expect(GmailLinks.thread("abc123", account: "me@example.com").absoluteString
         == "https://mail.google.com/mail/?authuser=me@example.com#all/abc123")
     #expect(GmailLinks.inbox(account: nil).absoluteString == "https://mail.google.com/mail/#inbox")
+    #expect(GmailLinks.mobileThread("abc123", account: "me@example.com").absoluteString
+        == "https://mail.google.com/mail/mu/mp/?authuser=me@example.com#cv/All%20Mail/abc123")
 }
 
 // MARK: - Demo backend

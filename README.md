@@ -147,13 +147,35 @@ turned on. Mail refreshes when the app opens and every ten minutes while it is o
 ```sh
 brew install xcodegen      # once: the Xcode project is generated from iOS/project.yml
 make ios-sim               # build and run in the simulator on the demo mailbox
-make ios-device            # open the project in Xcode; choose your team under Signing, then run on your iPhone
+make ios-device            # open the project in Xcode, then run it on your iPhone (⌘R)
+make ios-signing           # once, after choosing your team in Xcode: keep it (see below)
 ```
 
+The Xcode project is regenerated from `iOS/project.yml` by every `make ios-…`, which would drop the team you chose in
+Xcode's Signing & Capabilities tab. After choosing it (and changing the bundle ID there, if Xcode says it's taken), run
+`make ios-signing`: it reads both from the project and saves them in `iOS/signing.env` (not committed), and every
+later `make ios-…` uses them. You can also pass them directly: `make ios-signing TEAM=XXXXXXXXXX BUNDLE_ID=…`.
+
 Sign-in needs an OAuth client of type **iOS** (the Mac's Desktop client won't work) in the same Google Cloud
-project, with bundle ID `dev.denw.gmail-gtd.ios`. Paste its client ID on the sign-in screen. Google's page opens in
+project, with the app's bundle ID (`dev.denw.gmail-gtd.ios` unless you saved another). Paste its client ID on the
+sign-in screen. Google's page opens in
 a sign-in sheet and returns to the app on the reversed client ID scheme. A free Apple ID can install on your own
 phone, but the app stops opening after 7 days until you run it from Xcode again; a paid developer account avoids that.
+
+### Installing with AltStore
+
+Without Xcode, install it with [AltStore](https://altstore.io) (AltStore Classic; it signs the app with your own
+Apple ID and refreshes it before the 7 days run out). In AltStore, Sources → + and add:
+
+```
+https://github.com/denwilliams/gmail-gtd/releases/latest/download/source.json
+```
+
+To publish a version, push a tag like `ios-v1.1` (or run the **iPhone release** workflow): it builds an unsigned
+`.ipa` with `make ios-ipa`, makes a GitHub release, and attaches the `.ipa` and that source. `make ios-ipa VERSION=1.1`
+builds the same `.ipa` locally, in `build/GmailGTD.ipa`, without touching your signed Xcode project. AltStore may
+change the bundle ID when it signs; if Google's sign-in refuses the iOS client, set the client's bundle ID to the one
+AltStore shows.
 
 Debug builds accept `--route intray` (or `today`, `next`, …) and `--route intray/thread` to open a screen at launch.
 

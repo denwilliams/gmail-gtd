@@ -3,8 +3,10 @@ import AppKit
 
 /// The app icon, drawn in code so there is one source for the Dock icon and the bundle's .icns.
 /// A mail envelope with a check badge, on a standard macOS squircle. (Apple's licence doesn't allow SF Symbols
-/// in app icons, so the artwork is plain shapes.)
+/// in app icons, so the artwork is plain shapes.) `fullBleed` is the iPhone version: an opaque square that iOS masks.
 struct AppIconView: View {
+    var fullBleed = false
+
     private let blue = Color(red: 0.04, green: 0.52, blue: 1.0)
     private let lightBlue = Color(red: 0.39, green: 0.82, blue: 1.0)
     private let green = Color(red: 0.19, green: 0.82, blue: 0.35)
@@ -12,10 +14,22 @@ struct AppIconView: View {
     var body: some View {
         ZStack {
             // macOS icons sit inside a 1024 canvas with a margin: the squircle is 824 wide.
-            RoundedRectangle(cornerRadius: 185, style: .continuous)
-                .fill(LinearGradient(colors: [lightBlue, blue], startPoint: .top, endPoint: .bottom))
-                .frame(width: 824, height: 824)
-                .shadow(color: .black.opacity(0.28), radius: 20, y: 14)
+            if fullBleed {
+                LinearGradient(colors: [lightBlue, blue], startPoint: .top, endPoint: .bottom)
+            } else {
+                RoundedRectangle(cornerRadius: 185, style: .continuous)
+                    .fill(LinearGradient(colors: [lightBlue, blue], startPoint: .top, endPoint: .bottom))
+                    .frame(width: 824, height: 824)
+                    .shadow(color: .black.opacity(0.28), radius: 20, y: 14)
+            }
+
+            artwork.scaleEffect(fullBleed ? 1024 / 824 : 1)
+        }
+        .frame(width: 1024, height: 1024)
+    }
+
+    private var artwork: some View {
+        ZStack {
 
             ZStack {
                 RoundedRectangle(cornerRadius: 56, style: .continuous)
@@ -38,7 +52,6 @@ struct AppIconView: View {
             .shadow(color: .black.opacity(0.2), radius: 10, y: 6)
             .offset(x: 215, y: 150)
         }
-        .frame(width: 1024, height: 1024)
     }
 }
 
@@ -65,9 +78,10 @@ private struct Checkmark: Shape {
 @MainActor
 enum AppIcon {
     /// The icon as an image at `pixels` x `pixels`.
-    static func png(pixels: Int) -> Data? {
-        let renderer = ImageRenderer(content: AppIconView())
+    static func png(pixels: Int, fullBleed: Bool = false) -> Data? {
+        let renderer = ImageRenderer(content: AppIconView(fullBleed: fullBleed))
         renderer.scale = CGFloat(pixels) / 1024
+        renderer.isOpaque = fullBleed   // iOS icons must have no alpha channel
         guard let cg = renderer.cgImage else { return nil }
         return NSBitmapImageRep(cgImage: cg).representation(using: .png, properties: [:])
     }
@@ -86,5 +100,10 @@ enum AppIcon {
         for (name, pixels) in sizes {
             if let data = png(pixels: pixels) { try? data.write(to: URL(filePath: folder).appending(path: "icon_\(name).png")) }
         }
+    }
+
+    /// The iPhone app's single 1024 icon: `GmailGTD --export-ios-icon <file>.png` (see `make ios-icon`).
+    static func exportIOSIcon(to file: String) {
+        if let data = png(pixels: 1024, fullBleed: true) { try? data.write(to: URL(filePath: file)) }
     }
 }

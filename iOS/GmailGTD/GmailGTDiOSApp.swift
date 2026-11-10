@@ -1,3 +1,4 @@
+import SafariServices
 import SwiftUI
 import AuthenticationServices
 import GTDCore
@@ -23,9 +24,18 @@ struct GmailGTDiOSApp: App {
 
 struct RootView: View {
     @Environment(AppModel.self) private var model
+    @State private var prewarm: SFSafariViewController.PrewarmingToken?
 
     var body: some View {
-        if model.signedIn { MailNavigation() } else { SignInScreen() }
+        @Bindable var model = model
+        Group {
+            if model.signedIn { MailNavigation() } else { SignInScreen() }
+        }
+        .sheet(item: $model.gmailPage) { page in SafariSheet(url: page.url).ignoresSafeArea() }
+        .onChange(of: model.signedIn && !model.demo, initial: true) { _, live in
+            prewarm?.invalidate()
+            prewarm = live ? GmailPrewarm.start() : nil
+        }
     }
 }
 

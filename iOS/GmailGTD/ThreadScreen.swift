@@ -124,6 +124,11 @@ struct ThreadScreen: View {
                 }
                 .buttonStyle(PhoneBucketButtonStyle(color: bucket.color))
             }
+            // Fills the grid's last cell; the same action is also in the toolbar.
+            if let id = model.selection {
+                Button { model.openInGmail(id) } label: { Label("Gmail", systemImage: "arrow.up.forward.square") }
+                    .buttonStyle(PhoneBucketButtonStyle(color: .secondary))
+            }
         }
         .padding(.horizontal, 10).padding(.top, 8).padding(.bottom, 4)
         .background(.bar)
