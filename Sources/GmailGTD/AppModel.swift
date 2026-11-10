@@ -1314,9 +1314,7 @@ final class AppModel {
 
     // MARK: - Gmail links
 
-    func openInGmail(_ threadID: String) {
-        open(GmailLinks.thread(threadID, account: email), app: GmailLinks.appThread(threadID))
-    }
+    func openInGmail(_ threadID: String) { open(GmailLinks.thread(threadID, account: email)) }
 
     func openGmail() { open(GmailLinks.inbox(account: email), app: GmailLinks.appInbox) }
 
