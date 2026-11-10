@@ -20,6 +20,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSApp.terminate(nil)
             return
         }
+        if let i = args.firstIndex(of: "--export-ios-icon"), args.indices.contains(i + 1) {
+            AppIcon.exportIOSIcon(to: args[i + 1])
+            NSApp.terminate(nil)
+            return
+        }
         NSApp.setActivationPolicy(.regular)
         NSApp.applicationIconImage = AppIcon.image   // the Dock icon when there is no app bundle
         NSApp.activate()

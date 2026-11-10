@@ -43,6 +43,7 @@ targets:
         INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
         MARKETING_VERSION: "1.0"
         CURRENT_PROJECT_VERSION: "1"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         CODE_SIGN_STYLE: Automatic
         # Your signing team, saved by `make ios-signing TEAM=XXXXXXXXXX`.
         DEVELOPMENT_TEAM: "${GMAIL_GTD_TEAM}"

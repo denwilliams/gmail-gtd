@@ -9,7 +9,7 @@ APP   := build/GmailGTD.app
 OPEN  ?= 1
 
 .DEFAULT_GOAL := app
-.PHONY: app debug install run demo test clean help ios-project ios-sim ios-device ios-signing
+.PHONY: app debug install run demo test clean help ios-project ios-sim ios-device ios-signing ios-icon
 
 app: ## Build build/GmailGTD.app (release)
 	./scripts/make-app.sh release
@@ -52,6 +52,12 @@ ios-signing: ## Save the iPhone app's signing team and bundle ID: pick them in X
 	printf 'GMAIL_GTD_TEAM := %s\nGMAIL_GTD_BUNDLE_ID := %s\n' "$$team" "$$bundle" > $(SIGNING); \
 	echo "Saved to $(SIGNING):"; cat $(SIGNING)
 	@$(MAKE) --no-print-directory ios-project
+
+IOS_ICON := iOS/GmailGTD/Assets.xcassets/AppIcon.appiconset/AppIcon.png
+
+ios-icon: ## Redraw the iPhone app icon from the Mac app's icon code (AppIcon.swift)
+	swift build --product GmailGTD
+	"$$(swift build --show-bin-path)/GmailGTD" --export-ios-icon $(IOS_ICON)
 
 ios-project: ## Generate iOS/GmailGTDiOS.xcodeproj with your saved signing (needs `brew install xcodegen`)
 	cd iOS && xcodegen generate --quiet
