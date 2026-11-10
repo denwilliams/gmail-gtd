@@ -1,7 +1,7 @@
 import SwiftUI
 import GTDCore
 
-/// One system colour per bucket, used wherever a bucket appears (sidebar, list chips, action buttons).
+/// One system colour per status, used wherever a status appears (sidebar, list chips, action buttons).
 /// Plain system colours, and always alongside the bucket's name, so colour is never the only cue.
 extension GTDBucket {
     /// A shorter name for tight spaces.
@@ -22,7 +22,7 @@ extension GTDBucket {
         case .reference: .teal
         case .project: .indigo
         case .noise: .gray
-        case .done: .green
+        case .junk: .brown
         }
     }
 }

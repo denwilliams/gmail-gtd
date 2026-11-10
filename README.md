@@ -1,37 +1,86 @@
 # gmail-gtd
 
-A native macOS Gmail client built around Getting Things Done. Google Workspace only.
+A native macOS and iPhone Gmail client built around Getting Things Done. Google Workspace only.
 Triage suggestions and summaries run on-device with Apple Foundation Models by default.
 Optional Jev categorisation sends email text to TypeSafe only after explicit opt-in.
 
-- `GmailGTD`: SwiftUI app: a Today dashboard, a three-pane inbox/bucket view, a Projects section, AI suggestions, and Open in Gmail on every thread
+- `GmailGTD`: SwiftUI app: a Today dashboard, a three-pane In-tray/status view with label filters, a Projects section, AI suggestions, and Open in Gmail on every thread
+- `iOS/`: the iPhone app, sharing the Mac app's model (see [iPhone app](#iphone-app))
 - `gtd`: CLI sharing the same core, including an interactive `gtd process`
-- `GTDCore`: auth, Gmail REST client, label manager, triage
+- `GTDCore`: auth, Gmail REST client, label manager and label filters, triage
 
-GTD buckets are Gmail labels: `GTD/Next Action`, `GTD/Waiting For`, `GTD/Someday`,
-`GTD/Reference`, `GTD/Project`, `GTD/Noise` (bulk mail you probably never need; a denoise and trash step is planned), `GTD/Done`. Every thread ends in one of these, so nothing disappears into an unlabelled archive. Filing swaps the GTD label and keeps Next Action, Waiting For and Someday in the Gmail Inbox,
-returning previously archived threads to the Inbox too. Reference and Noise are archived (not deleted)
-and remain searchable under their GTD labels. Project and Done keep their existing archive behaviour.
-These rules apply when filing a thread; existing mail is not bulk-migrated.
+## Labels
+
+Every thread is described by five label families, all ordinary nested Gmail labels. The older `GTD/*`
+labels are ignored.
+
+| Family | Gmail labels | Per thread | Managed by |
+|---|---|---|---|
+| 🚦 Status | `🚦/In-tray`, `🚦/Next Action`, `🚦/Waiting For`, `🚦/Someday`, `🚦/Reference`, `🚦/Project`, `🚦/Noise`, `🚦/Junk` | exactly one | the app: sidebar and number keys |
+| 🗂️ Classification | `🗂️/Newsletters`, `🗂️/Notifications`, `🗂️/Personal`… | one (or none) | Gmail filters; dropdown in the app |
+| 🏢 Source | `🏢/AWS`, `🏢/Internal`, `🏢/Vendor`… | one (or none) | Gmail filters; dropdown in the app |
+| 🏷️ Tags | `🏷️/Hiring`… | any number | menu in the app |
+| 🎯 Projects | `🎯/Data Warehouse`… | any number | menu in the app |
+
+### Status
+
+**In-tray** is the processing queue (the app's name for what used to be its Inbox view, so it is not
+confused with Gmail's Inbox). The In-tray view lists only threads labelled `🚦/In-tray`, so Gmail
+filters decide what lands there. Filing with `1`–`7` swaps the status label:
+
+| Key | Status | Gmail Inbox |
+|---|---|---|
+| `0` | In-tray | kept in Inbox |
+| `1` | Next Action | kept in Inbox |
+| `2` | Waiting For | kept in Inbox |
+| `3` | Someday | kept in Inbox |
+| `4` | Reference | archived |
+| `5` | Project | archived |
+| `6` | Noise | archived |
+| `7` | Junk | archived |
+
+Filing removes In-tray, Backlog and any other status, and adds or removes INBOX as above, returning
+previously archived threads to the Inbox when needed. Nothing is ever trashed or deleted: Noise and Junk
+are archived and stay searchable under their labels. There is no Done status: **Done** (`E`, or ticking a
+Next Action on Today) files the thread as Reference. `0` puts a thread back in the In-tray and the Gmail
+Inbox. The app creates any missing 🚦 status labels and `🚦/In-tray` on first connect. Existing mail is
+not bulk-migrated.
+
+### Classification, Source, Tags and Projects
+
+The app discovers these from Gmail by their emoji prefix (with or without the emoji variation selector),
+so a label you add in Gmail appears after the next Refresh. It never creates, renames or deletes them.
+
+- **Above the open thread**: dropdowns for 🗂️ Classification and 🏢 Source (one each, or none) and menus
+  for 🏷️ Tags and 🎯 Projects (tick any number). Changes appear at once and are written to Gmail in the
+  background. They never change the thread's status or Inbox placement, and they are not part of `⌘Z`
+  undo, which covers moves only.
+- **Under each list row**: the thread's Classification, Source, Tags and Projects, where known.
+- **In the toolbar**: a filter menu per family. Ticking several options in one menu matches any of them
+  (OR); filters in different menus must all match (AND). Classification and Source also offer **None**,
+  for mail no filter has labelled. Filters apply to every mail list (not Today or Corrections), stay set
+  as you move between statuses, and are sent to Gmail as a search query, so paging works as normal.
+  🎯 Projects are independent of the 🚦 Project status.
 
 ## Backlog
 
-To keep Inbox for new mail, manually apply the Gmail label **GTD/Backlog** to old mail and
-archive it in Gmail. Open **Backlog** in the sidebar (or the Go menu) to triage that archived
-mail with the same category buttons, suggestions, approval and `1`–`7` shortcuts as Inbox.
-Backlog is a processing queue, not another GTD destination. If the label does not exist, the
-view is empty; the app does not create it or move old mail automatically.
+To keep the In-tray for new mail, manually apply the Gmail label **🚦/Backlog** to old mail (in place
+of `🚦/In-tray`) and archive it in Gmail. Open **Backlog** in the sidebar (or the Go menu) to triage that
+archived mail with the same status buttons, suggestions, approval and `1`–`7` shortcuts as the In-tray.
+Backlog is a processing queue, not a filing destination. If the label does not exist, the view is empty;
+the app does not create it or move old mail automatically.
 
-Viewing Backlog never adds INBOX or changes labels. Explicit filing removes Backlog and applies
-the normal destination rules above, preserving unrelated labels. Undo restores Backlog and the
-original Inbox/archive state. `0` explicitly moves the thread back to Inbox and clears Backlog.
-De-noise bulk mode remains Inbox-only.
+Viewing Backlog never adds INBOX or changes labels. Explicit filing removes Backlog and applies the
+normal status rules above, preserving unrelated labels. Undo restores Backlog and the original
+Inbox/archive state. `0` explicitly moves the thread to the In-tray and clears Backlog.
+De-noise bulk mode remains In-tray-only.
 
 ## Demo mode
 
-No Google account or sign-in needed. Demo mode loads a fictional mailbox (20 inbox threads plus
-filed Next Actions, Waiting For, Projects, Someday and Reference) and every action works:
-filing, archiving, completing, un-filing and Open in Gmail (which shows the link instead of
+No Google account or sign-in needed. Demo mode loads a fictional mailbox (20 In-tray threads plus
+filed Next Actions, Waiting For, Projects, Someday, Reference, Noise and Junk, with sample
+Classification, Source, Tag and Project labels) and every action works: filing, archiving,
+completing, un-filing, editing labels, filtering and Open in Gmail (which shows the link instead of
 opening it). The on-device model runs on the sample mail like it would on real mail.
 Everything lives in memory, so relaunching resets it.
 
@@ -65,7 +114,7 @@ and turns it into an `.icns`.
 
 1. In Google Cloud (inside your Workspace org), create a project and enable the **Gmail API**.
 2. OAuth consent screen: user type **Internal**, scope `https://www.googleapis.com/auth/gmail.modify`.
-3. Create an OAuth client of type **Desktop app**.
+3. Create an OAuth client of type **Desktop app** (and, for the iPhone app, one of type **iOS**).
 4. If API controls restrict third-party apps, have a Workspace admin trust the client.
 
 Sign in with the client ID (and secret, if shown). Tokens go in the Keychain and are shared
@@ -74,11 +123,39 @@ by the app and the CLI.
 ```sh
 swift run GmailGTD                                  # app: enter client ID on first launch
 swift run gtd login --client-id <ID> --client-secret <SECRET>
-swift run gtd setup                                 # create GTD/* labels
-swift run gtd process                               # walk the inbox
+swift run gtd setup                                 # create the 🚦 status labels and 🚦/In-tray
+swift run gtd process                               # walk the In-tray
 ```
 
 `GMAIL_GTD_CLIENT_ID` / `GMAIL_GTD_CLIENT_SECRET` also work.
+
+## iPhone app
+
+The iPhone app uses the same model as the Mac app (`AppModel` and the label code), so filing, undo, facets and
+filters behave the same. Only the screens are its own:
+
+- **Mail**: Today, In-tray, Backlog and the seven statuses. Pull down to refresh.
+- **A list**: swipe right for Next Action and Waiting For (in the In-tray) or Done (inside a status); swipe left
+  for Noise and Reference, or back to the In-tray. Long-press a row for every status. The filter button opens
+  Classification, Source, Tags and Projects filters (OR within a family, AND across them).
+- **A thread**: Classification and Source menus, Tags and Projects (tick several), the suggestion with Approve,
+  Summary or Original, and a grid of status buttons. Filing moves on to the next thread, like the Mac app.
+
+Not on iPhone yet: De-noise, Corrections and the categorisation settings (Jev). Summaries need Apple Intelligence
+turned on. Mail refreshes when the app opens and every ten minutes while it is open; iOS gives no background time.
+
+```sh
+brew install xcodegen      # once: the Xcode project is generated from iOS/project.yml
+make ios-sim               # build and run in the simulator on the demo mailbox
+make ios-device            # open the project in Xcode; choose your team under Signing, then run on your iPhone
+```
+
+Sign-in needs an OAuth client of type **iOS** (the Mac's Desktop client won't work) in the same Google Cloud
+project, with bundle ID `dev.denw.gmail-gtd.ios`. Paste its client ID on the sign-in screen. Google's page opens in
+a sign-in sheet and returns to the app on the reversed client ID scheme. A free Apple ID can install on your own
+phone, but the app stops opening after 7 days until you run it from Xcode again; a paid developer account avoids that.
+
+Debug builds accept `--route intray` (or `today`, `next`, …) and `--route intray/thread` to open a screen at launch.
 
 ## Optional Jev and custom categorisation prompts
 
@@ -92,18 +169,18 @@ Jev stops new provider calls; an already-sent request cannot be recalled and its
 Sign-out deletes this mailbox’s persisted Jev cache and clears in-memory results, but retains provider settings/token, like the saved OAuth client
 configuration. Turning Jev off restores local-only approval immediately.
 
-**Privacy/cost:** when enabled, on-screen threads in Inbox, Backlog, Next Action and Waiting For are sent
+**Privacy/cost:** when enabled, on-screen threads in In-tray, Backlog, Next Action and Waiting For are sent
 automatically to TypeSafe, including sender, subject and message text (not attachments). API charges
 may apply. Demo mode follows the same opt-in using fictional mail. Nothing is filed automatically.
 The detail pane identifies both sources; **Approve** (also **A**) uses Jev whenever enabled, including
 when the local model is unavailable. If Jev is pending, fails, lacks a token or returns an invalid
 category, approval stays disabled—there is no silent local fallback. Use Retry/Regenerate, fix Settings,
-disable Jev, or choose a bucket manually. The CLI's `suggest` and `process` share these settings and policy;
+disable Jev, or choose a status manually. The CLI's `suggest` and `process` share these settings and policy;
 configure the token/prompts in the app. Summaries, digests and project plans remain on-device.
 
 Integration uses [TypeSafe System One](https://docs.typesafe.ai/introduction/quickstart),
 a Bearer-authenticated `POST https://api.typesafe.ai/v1/systemone` with a single typed Choice question
-and the pinned model `jev-1.14.0`. It returns a GTD category and per-category probabilities,
+and the pinned model `jev-1.14.0`. It returns a 🚦 status (Next Action … Junk) and per-category probabilities,
 not generated summaries/actions. The Noise estimate is the documented
 [Choice probability](https://docs.typesafe.ai/primitives/choice#response-structure)
 `answers.bucket.probabilities.noise`, **not** the separate `confidence` statistic or a value
@@ -151,8 +228,8 @@ mail, verify both categories, press Approve, then disable Jev and verify local-o
 
 ## De-noise confidence threshold
 
-In the Inbox, choose a **Minimum Noise estimate** (default 90%, 0–100% in 1% steps).
-De-noise Mode requires ten loaded inbox threads whose active approval category is Noise
+In the In-tray, choose a **Minimum Noise estimate** (default 90%, 0–100% in 1% steps).
+De-noise Mode requires ten loaded In-tray threads whose active approval category is Noise
 and whose finite, in-range score meets the threshold inclusively. It uses Jev's Noise probability
 when Jev is enabled, otherwise the local AFM self-estimate. It never borrows the other source's
 score or treats missing/invalid scores as high confidence, even at 0%.
@@ -174,11 +251,11 @@ Jev scores persist with their categories in the account-scoped cache described a
 
 ## Local Corrections
 
-The **Corrections** sidebar keeps timestamped snapshots when a manual bucket choice differs from
+The **Corrections** sidebar keeps timestamped snapshots when a manual status choice differs from
 its active approval suggestion: Jev when enabled and successful, otherwise AFM when Jev is disabled.
-No active result means no inferred correction. Both available categories, the chosen bucket, and the
-relevant prompts at the time are retained; subsequent classifications do not rewrite history.
-This includes De-noise “Not Noise” choices, but not approvals, automatic filing or moves to Inbox.
+No active result means no inferred correction. Both available categories, the chosen status, and the
+relevant prompts at the time are retained (older records that say Done read as Reference); subsequent classifications do not rewrite history.
+This includes De-noise “Not Noise” choices and Done, but not approvals, automatic filing or moves to the In-tray.
 Records are added only after Gmail confirms filing; successful undo removes the corresponding event.
 
 Each entry offers a **possible explanation**, generated deterministically on this Mac from captured
@@ -208,6 +285,6 @@ never overwritten. To remove retained history, quit the app and delete that loca
 
 - Requires macOS 26+ for Foundation Models. Threads are trimmed to fit the small on-device
   context window.
-- The model runs automatically on the open Inbox or Backlog thread, but nothing is filed until you accept.
+- The model runs automatically on the open In-tray or Backlog thread, but nothing is filed until you accept.
 - Compose and reply aren't built yet; use Open in Gmail.
-- Keys in the app: `1`-`7` file into a bucket, `0` back to inbox, `⌘1`-`⌘7` go to a bucket, `⌘0` Inbox, `⌘T` Today, `⌘Z` undo the last move, `A` accept, `E` done (finished with it), `R` regenerate, `O` open in Gmail. Hold `⌘` for the full list. Suggestions generate automatically for the open Inbox or Backlog thread (and plans for projects); Regenerate re-runs one.
+- Keys in the app: `1`-`7` file under a status, `0` back to the In-tray, `⌘1`-`⌘7` go to a status, `⌘0` In-tray, `⌘T` Today, `⌘Z` undo the last move, `A` accept, `E` done (files as Reference), `R` regenerate, `O` open in Gmail. Hold `⌘` for the full list. Suggestions generate automatically for the open In-tray or Backlog thread (and plans for projects); Regenerate re-runs one.

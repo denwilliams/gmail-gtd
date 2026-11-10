@@ -1,10 +1,14 @@
 import SwiftUI
+#if canImport(AppKit)
 import AppKit
+#elseif canImport(UIKit)
+import UIKit
+#endif
 import GTDCore
 
 enum Folder: Hashable, Identifiable {
     case today
-    case inbox
+    case inTray
     case backlog
     case corrections
     case bucket(GTDBucket)
@@ -13,7 +17,7 @@ enum Folder: Hashable, Identifiable {
     var title: String {
         switch self {
         case .today: "Today"
-        case .inbox: "Inbox"
+        case .inTray: "In-tray"
         case .backlog: "Backlog"
         case .corrections: "Corrections"
         case .bucket(let b): b.title
@@ -22,7 +26,7 @@ enum Folder: Hashable, Identifiable {
     var symbol: String {
         switch self {
         case .today: "sun.max"
-        case .inbox: "tray"
+        case .inTray: "tray"
         case .backlog: "tray.full"
         case .corrections: "arrow.triangle.branch"
         case .bucket(.nextAction): "bolt"
@@ -31,20 +35,20 @@ enum Folder: Hashable, Identifiable {
         case .bucket(.reference): "books.vertical"
         case .bucket(.project): "square.stack.3d.up"
         case .bucket(.noise): "speaker.slash"
-        case .bucket(.done): "checkmark.circle"
+        case .bucket(.junk): "xmark.bin"
         }
     }
     /// Unprocessed queues share the same category controls, suggestions and shortcut hints.
-    var isTriage: Bool { self == .inbox || self == .backlog }
+    var isTriage: Bool { self == .inTray || self == .backlog }
 
-    static let mail: [Folder] = [.inbox, .backlog] + GTDBucket.allCases.map(Folder.bucket)
+    static let mail: [Folder] = [.inTray, .backlog] + GTDBucket.allCases.map(Folder.bucket)
 }
 
 enum DetailTab: Hashable { case summary, original }
 
 enum TodayList { case nextActions, waiting }
 
-/// A move, with what is needed to take it back: the thread's Inbox, Backlog and GTD labels before, and the list row
+/// A move, with what is needed to take it back: the thread's Inbox, In-tray, Backlog and status labels before, and the list row
 /// that was taken off the screen (and where it sat), so undo can put it back at once.
 struct UndoMove: Identifiable {
     let id: UUID
@@ -53,7 +57,7 @@ struct UndoMove: Identifiable {
     /// Resolves after earlier moves finish, before this move changes any labels. Undo can be clicked meanwhile.
     let before: Task<Set<String>, Error>
     let summary: String
-    /// The bucket it moved to, or nil for the inbox. Drives the toast's colour.
+    /// The status it moved to, or nil for the In-tray. Drives the toast's colour.
     let destination: GTDBucket?
     let origin: Folder
     let row: ThreadRow?
@@ -72,6 +76,8 @@ struct ThreadRow: Identifiable, Hashable {
     let unread: Bool
     /// False until the thread's headers have been fetched; the list shows the snippet meanwhile.
     var loaded = true
+    /// Every label on the thread (Source, Classification, Tags, Projects…), once known.
+    var labelIDs: Set<String> = []
 }
 
 @MainActor @Observable
@@ -205,11 +211,16 @@ final class AppModel {
     // Today
     var nextActions: [ThreadRow] = []
     var waiting: [ThreadRow] = []
-    var inboxCount = 0
+    var inTrayCount = 0
     var digest: String?
     var digestLoading = false
 
-    // Projects
+    // Labels: the Source, Classification, Tag and Project options in the mailbox, and the header filters.
+    private(set) var catalog = LabelCatalog()
+    /// OR within a facet, AND across facets. Applies to every mail list (not Today), and survives folder changes.
+    private(set) var filter = LabelFilter()
+    /// The open thread's labels, updated at once when a facet is edited.
+    private(set) var detailLabels: Set<String> = []
 
     // Keyboard shortcut overlay: pinned from the menu, or shown while ⌘ is held.
     var shortcutsPinned = false
@@ -312,7 +323,7 @@ final class AppModel {
     }
 
     var deNoiseEligibleRows: [ThreadRow] {
-        guard folder == .inbox else { return [] }
+        guard folder == .inTray else { return [] }
         var seen: Set<String> = []
         return rows.filter { $0.loaded && seen.insert($0.id).inserted && qualifiesForDeNoise($0.id) }
     }
@@ -338,7 +349,7 @@ final class AppModel {
 
     private var deNoiseContextIsValid: Bool {
         guard let batch = deNoiseBatch, signedIn, client != nil, labels != nil,
-              folder == .inbox, !loading, !showingCategorisationSettings else { return false }
+              folder == .inTray, !loading, !showingCategorisationSettings else { return false }
         return batch.rows.allSatisfy { member in
             rows.contains { $0.id == member.id } && qualifiesForDeNoise(member.id)
         }
@@ -398,13 +409,24 @@ final class AppModel {
         await connect(using: DemoMailService(), persist: false)
     }
 
-    func signIn() async {
+    /// Signs in through the browser. iOS passes `authorize`, which shows Google's page in a web
+    /// authentication session (the callback scheme is given) and returns the URL Google redirected to.
+    func signIn(authorize: (@MainActor @Sendable (URL, String) async throws -> URL)? = nil) async {
         error = nil
+        let clientID = clientID.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !clientID.isEmpty else { error = GmailError.notConfigured.localizedDescription; return }
         let config = OAuthConfig(clientID: clientID, clientSecret: clientSecret.isEmpty ? nil : clientSecret)
         config.save()
         do {
-            _ = try await GmailAuth(config: config).signIn { NSWorkspace.shared.open($0) }
+            let auth = GmailAuth(config: config)
+            if let authorize {
+                let scheme = auth.iOSCallbackScheme
+                _ = try await auth.signIn(redirect: auth.iOSRedirect) { try await authorize($0, scheme) }
+            } else {
+                #if os(macOS)
+                _ = try await auth.signIn { NSWorkspace.shared.open($0) }
+                #endif
+            }
             signedIn = true
             await connect()
         } catch { self.error = error.localizedDescription }
@@ -425,6 +447,7 @@ final class AppModel {
         store.clear(); store = SummaryStore()   // Summaries are private: sign-out deletes them.
         signedIn = false; client = nil; cache = nil; labels = nil; email = nil
         rows = []; detail = nil; selection = nil; nextActions = []; waiting = []; digest = nil
+        catalog = LabelCatalog(); filter = LabelFilter(); detailLabels = []
     }
 
     private func connect() async {
@@ -453,10 +476,13 @@ final class AppModel {
         do {
             let labels = LabelManager(client: client)
             let ids = try await labels.ensureLabels()
+            let catalog = try await labels.catalog()
             let mailbox = try? await client.emailAddress().trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
             guard generation == categorisationGeneration, signedIn else { return }
             self.client = client; self.cache = client; self.labels = labels
             labelIDs = ids
+            self.catalog = catalog
+            filter = filter.pruned(to: catalog)
             email = mailbox.flatMap { $0.isEmpty ? nil : $0 }
             // Tests may route all persistent caches to a temporary directory; demo remains memory-only.
             let summaryURL = cacheDirectory?.appending(path: "summaries.json") ?? SummaryStore.defaultFileURL
@@ -503,8 +529,9 @@ final class AppModel {
         let generation = mailboxGeneration
         do {
             let label = try await labelID(for: openFolder)
-            let page = try await fetchPage(labelID: label, max: pageSize, hydrate: false, pageToken: nil)
-            guard folder == openFolder, generation == mailboxGeneration else { return }
+            let openFilter = filter
+            let page = try await fetchPage(labelID: label, max: pageSize, hydrate: false, pageToken: nil, filter: openFilter)
+            guard folder == openFolder, filter == openFilter, generation == mailboxGeneration else { return }
             rows = page.rows
             nextPageToken = page.next
             selectFirstIfNeeded()
@@ -521,7 +548,8 @@ final class AppModel {
 
     private func labelID(for folder: Folder) async throws -> String {
         switch folder {
-        case .today, .inbox: "INBOX"
+        case .today: "INBOX"
+        case .inTray: try await labels?.inTrayLabelID() ?? ""
         case .backlog: try await labels?.backlogLabelID() ?? ""
         case .corrections: "" // Local history never maps to a Gmail label.
         case .bucket(let b): labelIDs[b] ?? ""
@@ -534,11 +562,13 @@ final class AppModel {
         try await fetchPage(labelID: labelID, max: max, hydrate: hydrate, pageToken: nil).rows
     }
 
-    private func fetchPage(labelID: String, max: Int, hydrate: Bool, pageToken: String?) async throws -> (rows: [ThreadRow], next: String?) {
+    private func fetchPage(labelID: String, max: Int, hydrate: Bool, pageToken: String?,
+                           filter: LabelFilter = LabelFilter()) async throws -> (rows: [ThreadRow], next: String?) {
         // A missing Backlog label is an empty queue, not an unfiltered all-mail request.
         guard let client, !labelID.isEmpty else { return ([], nil) }
         let generation = mailboxGeneration
-        let page = try await client.listThreadPage(labelIDs: [labelID], query: nil, max: max, pageToken: pageToken)
+        let query = filter.gmailQuery(catalog: catalog)
+        let page = try await client.listThreadPage(labelIDs: [labelID], query: query, max: max, pageToken: pageToken)
         guard generation == mailboxGeneration else { throw CancellationError() }
         let refs = page.refs
         for ref in refs {
@@ -549,7 +579,8 @@ final class AppModel {
         // A header cached against the same historyId needs no request at all.
         var result = refs.map { ref -> ThreadRow in
             if let h = store.header(for: ref.id, historyId: ref.historyId) {
-                return ThreadRow(id: ref.id, subject: h.subject, from: h.from, snippet: ref.snippet ?? "", date: h.date, unread: h.unread)
+                return ThreadRow(id: ref.id, subject: h.subject, from: h.from, snippet: ref.snippet ?? "", date: h.date, unread: h.unread,
+                                 labelIDs: Set(h.labelIds ?? []))
             }
             jevUnverified.insert(ref.id)
             return ThreadRow(id: ref.id, subject: "", from: "", snippet: ref.snippet ?? "", date: nil, unread: false, loaded: false)
@@ -618,13 +649,20 @@ final class AppModel {
     private static func header(of thread: GmailThread) -> CachedHeader? {
         guard let last = thread.messages?.last else { return nil }
         return CachedHeader(from: last.from, subject: last.subject, date: last.date,
-                            unread: thread.messages?.contains { $0.isUnread } ?? false)
+                            unread: thread.messages?.contains { $0.isUnread } ?? false,
+                            labelIds: Array(labels(of: thread)).sorted())
     }
 
     private static func row(for thread: GmailThread?, placeholder: ThreadRow) -> ThreadRow {
         guard let thread, let last = thread.messages?.last else { return placeholder }
         return ThreadRow(id: thread.id, subject: last.subject, from: last.from, snippet: placeholder.snippet,
-                         date: last.date, unread: thread.messages?.contains { $0.isUnread } ?? false)
+                         date: last.date, unread: thread.messages?.contains { $0.isUnread } ?? false,
+                         labelIDs: labels(of: thread))
+    }
+
+    /// Gmail labels messages, not threads: a thread carries every label on any of its messages.
+    private static func labels(of thread: GmailThread) -> Set<String> {
+        Set(thread.messages?.flatMap { $0.labelIds ?? [] } ?? [])
     }
 
     /// Fills in headers for the rows on screen that don't have them yet.
@@ -642,7 +680,7 @@ final class AppModel {
     private func loadDetail(preservingTab: Bool = false) async {
         scheduleQuietRefresh()
         aiNote = nil
-        guard let client, let id = selection else { detail = nil; return }
+        guard let client, let id = selection else { detail = nil; detailLabels = []; return }
         let generation = mailboxGeneration
         // Show the summary straight away if there is one; otherwise the original until it is ready.
         if !preservingTab {
@@ -655,6 +693,7 @@ final class AppModel {
             guard note(thread) else { scheduleEnqueue(); return }
             store.touch(id)
             detail = thread
+            detailLabels = Self.labels(of: thread)
             apply(thread, id: id)
             if !tabChosenByUser { detailTab = localSuggestion(for: id) != nil ? .summary : .original }
             aiNote = folder == .bucket(.project) ? planningUnavailable : localFailures[id]
@@ -666,12 +705,14 @@ final class AppModel {
 
     /// Watches the modifier keys so holding ⌘ for half a second reveals the shortcut cheat-sheet.
     private func installModifierMonitor() {
+        #if os(macOS)
         guard flagsMonitor == nil else { return }
         flagsMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
             let onlyCommand = event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command
             MainActor.assumeIsolated { self?.commandHeld(onlyCommand) }
             return event
         }
+        #endif
     }
 
     private func commandHeld(_ held: Bool) {
@@ -697,6 +738,10 @@ final class AppModel {
         refreshing = true; defer { refreshing = false }
         endDeNoiseMode()
         await cache?.invalidateAll()
+        if let labels, let fresh = try? await labels.catalog() {
+            catalog = fresh
+            filter = filter.pruned(to: fresh)
+        }
         failed = []
         planningUnavailable = nil
         aiNote = nil
@@ -722,7 +767,7 @@ final class AppModel {
     /// Folders where the model works through the list on its own: Inbox/Backlog triage, project plans.
     private var aiFolder: Bool {
         switch folder {
-        case .inbox, .backlog, .bucket(.project), .bucket(.nextAction), .bucket(.waitingFor): true
+        case .inTray, .backlog, .bucket(.project), .bucket(.nextAction), .bucket(.waitingFor): true
         default: false
         }
     }
@@ -755,10 +800,11 @@ final class AppModel {
         guard let token = nextPageToken, !loading, !loadingMore, !refreshing, client != nil, folder != .today else { return }
         loadingMore = true; defer { loadingMore = false }
         let openFolder = folder
+        let openFilter = filter
         do {
             let label = try await labelID(for: openFolder)
-            let page = try await fetchPage(labelID: label, max: pageSize, hydrate: false, pageToken: token)
-            guard folder == openFolder else { return }   // the user has moved to another folder
+            let page = try await fetchPage(labelID: label, max: pageSize, hydrate: false, pageToken: token, filter: openFilter)
+            guard folder == openFolder, filter == openFilter else { return }   // the user has moved on
             let known = Set(rows.map(\.id))
             rows += page.rows.filter { !known.contains($0.id) }
             nextPageToken = page.next
@@ -933,13 +979,24 @@ final class AppModel {
     }
 
     func fileSelected(into bucket: GTDBucket, manualChoice: Bool = true) async {
-        guard folder != .corrections, deNoiseBatch == nil, let id = selection, bucket != currentBucket else { return }   // already there
+        guard let id = selection else { return }
+        await file(id, into: bucket, manualChoice: manualChoice)
+    }
+
+    /// Files any listed thread, open or not (the iPhone's swipe actions).
+    func file(_ id: String, into bucket: GTDBucket, manualChoice: Bool = true) async {
+        guard folder != .corrections, deNoiseBatch == nil, bucket != currentBucket else { return }   // already there
         move(id, to: .bucket(bucket), summary: "Moved to \(bucket.title)", manualChoice: manualChoice)
     }
 
-    /// Any filed thread can be marked Done, except one that already is. (Reference is the other way to be
-    /// finished with a thread: it keeps it where you can browse it.)
-    var canFinish: Bool { currentBucket != nil && currentBucket != .done }
+    /// Puts any listed thread back in the In-tray.
+    func unfile(_ id: String) async {
+        guard deNoiseBatch == nil else { return }
+        move(id, to: .inTray, summary: "Moved back to In-tray")
+    }
+
+    /// Finished with a filed thread: it goes to Reference, where it stays searchable. (There is no Done status.)
+    var canFinish: Bool { currentBucket != nil && currentBucket != .reference }
 
     /// The bucket being viewed, if any.
     var currentBucket: GTDBucket? {
@@ -947,15 +1004,77 @@ final class AppModel {
         return nil
     }
 
-    /// Marks the open thread Done (the same as ticking it on Today): it moves to `GTD/Done`.
+    /// Done with the open thread (the same as ticking it on Today): it is filed as Reference.
     func finishSelected() async {
-        guard canFinish else { return }
-        await fileSelected(into: .done)
+        guard canFinish, deNoiseBatch == nil, let id = selection else { return }
+        move(id, to: .bucket(.reference), summary: "Done: moved to Reference", manualChoice: true)
     }
 
     func unfileSelected() async {
         guard deNoiseBatch == nil, let id = selection else { return }
-        move(id, to: .inbox, summary: "Moved back to Inbox")
+        move(id, to: .inTray, summary: "Moved back to In-tray")
+    }
+
+    // MARK: - Source, Classification, Tags and Projects
+
+    /// The open thread's options in one facet.
+    func values(_ facet: LabelFacet) -> [FacetLabel] { catalog.values(facet, in: detailLabels) }
+
+    /// Replaces the open thread's Source or Classification. Nil clears it.
+    func setSingle(_ facet: LabelFacet, to id: String?) {
+        guard facet.isSingle else { return }
+        setFacet(facet, to: Set(id.map { [$0] } ?? []))
+    }
+
+    /// Adds or removes one Tag or Project on the open thread.
+    func toggle(_ id: String, in facet: LabelFacet) {
+        var chosen = Set(values(facet).map(\.id))
+        if chosen.contains(id) { chosen.remove(id) } else { chosen.insert(id) }
+        setFacet(facet, to: chosen)
+    }
+
+    /// Changes one facet of the open thread on screen at once, then in Gmail. The thread stays where it is:
+    /// facets never change its status or Inbox placement.
+    private func setFacet(_ facet: LabelFacet, to values: Set<String>) {
+        guard let id = selection, detail?.id == id, let labels else { return }
+        let options = Set(catalog.options(facet).map(\.id))
+        let before = detailLabels
+        let after = before.subtracting(options).union(values)
+        guard after != before else { return }
+        relabelLocally(id, to: after)
+        let catalog = self.catalog
+        enqueueRemote { [weak self] in
+            do { try await labels.setFacet(facet, of: id, to: values, catalog: catalog) }
+            catch {
+                self?.relabelLocally(id, to: before)
+                self?.error = "Couldn\u{2019}t change \(facet.title): \(error.localizedDescription)"
+            }
+        }
+        scheduleQuietRefresh()
+    }
+
+    private func relabelLocally(_ id: String, to labelIDs: Set<String>) {
+        if detail?.id == id { detailLabels = labelIDs }
+        if let i = rows.firstIndex(where: { $0.id == id }) { rows[i].labelIDs = labelIDs }
+    }
+
+    // MARK: - Filters
+
+    func toggleFilter(_ id: String, in facet: LabelFacet) { updateFilter { $0.toggle(id, in: facet) } }
+    func toggleNoneFilter(_ facet: LabelFacet) { updateFilter { $0.toggleNone(facet) } }
+    func clearFilter(_ facet: LabelFacet) {
+        updateFilter { $0.selected[facet] = nil; $0.includesNone.remove(facet) }
+    }
+    func clearFilters() { updateFilter { $0 = LabelFilter() } }
+
+    private func updateFilter(_ change: (inout LabelFilter) -> Void) {
+        var next = filter
+        change(&next)
+        guard next != filter else { return }
+        filter = next
+        endDeNoiseMode()
+        guard folder != .today && folder != .corrections else { return }
+        Task { await folderChanged() }
     }
 
     // MARK: - Moving threads
@@ -964,7 +1083,7 @@ final class AppModel {
     // The Gmail call follows in the background. If Gmail refuses, the row comes back with an error. A quiet
     // refresh after a pause confirms the list matches Gmail.
 
-    private enum Destination { case bucket(GTDBucket), inbox }
+    private enum Destination { case bucket(GTDBucket), inTray }
 
     private func move(_ id: String, to destination: Destination, summary: String, manualChoice: Bool = false) {
         guard let labels, let client else { return }
@@ -1003,7 +1122,7 @@ final class AppModel {
                 _ = try await before.value   // Never move mail without an undo snapshot.
                 switch destination {
                 case .bucket(let bucket): try await labels.file(thread: id, into: bucket)
-                case .inbox: try await labels.unfile(thread: id)
+                case .inTray: try await labels.unfile(thread: id)
                 }
                 if let correction { move.correctionStore.append(correction) }
             } catch { self?.moveFailed(move, error) }
@@ -1126,11 +1245,12 @@ final class AppModel {
         // page and retains the already loaded tail instead of dropping the user's scroll/selection.
         guard force || rows.count <= pageSize + 10 else { return }
         let openFolder = folder
+        let openFilter = filter
         do {
             let label = try await labelID(for: openFolder)
-            let page = try await fetchPage(labelID: label, max: pageSize, hydrate: false, pageToken: nil)
+            let page = try await fetchPage(labelID: label, max: pageSize, hydrate: false, pageToken: nil, filter: openFilter)
             // A review or sign-out may have happened while the list request was in flight.
-            guard !Task.isCancelled, client != nil, folder == openFolder, deNoiseBatch == nil else { return }
+            guard !Task.isCancelled, client != nil, folder == openFolder, filter == openFilter, deNoiseBatch == nil else { return }
             let oldRows = rows
             // fetchPage reuses headers only when their history matches the fresh list. Restoring
             // old loaded rows here would hide replies and prevent visible-row hydration.
@@ -1171,8 +1291,9 @@ final class AppModel {
         do {
             async let next = fetchRows(labelID: labelIDs[.nextAction] ?? "", max: 12, hydrate: true)
             async let wait = fetchRows(labelID: labelIDs[.waitingFor] ?? "", max: 12, hydrate: true)
-            async let count = client.threadCount(labelID: "INBOX")
-            (nextActions, waiting, inboxCount) = try await (next, wait, count)
+            let inTray = try await labels?.inTrayLabelID() ?? ""
+            async let count = inTray.isEmpty ? 0 : client.threadCount(labelID: inTray)
+            (nextActions, waiting, inTrayCount) = try await (next, wait, count)
             error = nil
         } catch { self.error = error.localizedDescription; return }
         await refreshDigest()
@@ -1186,13 +1307,10 @@ final class AppModel {
         } catch { digest = nil }   // The digest is a nicety; the lists stand on their own.
     }
 
-    /// Ticks off a Next Action: clears its GTD label and leaves it archived.
+    /// Ticks off a Next Action: it is filed as Reference, out of the Inbox and still searchable.
     func finish(_ row: ThreadRow) async {
-        move(row.id, to: .bucket(.done), summary: "Marked done", manualChoice: true)
+        move(row.id, to: .bucket(.reference), summary: "Done: moved to Reference", manualChoice: true)
     }
-
-    // MARK: - Projects
-
 
     // MARK: - Gmail links
 
@@ -1201,6 +1319,12 @@ final class AppModel {
     func openGmail() { open(GmailLinks.inbox(account: email)) }
 
     private func open(_ url: URL) {
-        if demo { notice = "Demo mode: this would open \(url.absoluteString)" } else { NSWorkspace.shared.open(url) }
+        if demo { notice = "Demo mode: this would open \(url.absoluteString)" } else {
+            #if os(macOS)
+            NSWorkspace.shared.open(url)
+            #else
+            UIApplication.shared.open(url)
+            #endif
+        }
     }
 }

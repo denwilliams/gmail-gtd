@@ -32,7 +32,7 @@ enum ScreenshotExport {
 
         let scenes: [(name: String, folder: Folder)] = [
             ("today", .today),
-            ("inbox", .inbox),
+            ("intray", .inTray),
             ("next-action", .bucket(.nextAction)),
             ("projects", .bucket(.project)),
         ]

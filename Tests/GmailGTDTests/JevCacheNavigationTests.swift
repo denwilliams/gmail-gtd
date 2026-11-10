@@ -24,7 +24,9 @@ private actor NavigationMailbox: MailService {
     func holdReads() { heldReads = true }
     func addReply() { reply = true; revision += 1 }
     func listThreadPage(labelIDs: [String], query: String?, max: Int, pageToken: String?) async throws -> ThreadPage {
-        let page = try await base.listThreadPage(labelIDs: labelIDs, query: query, max: 100, pageToken: nil)
+        // Lists the In-tray as Gmail's Inbox, so the filed thread can be revisited from both folders.
+        let ids = labelIDs.map { $0 == DemoMailService.inTrayID ? "INBOX" : $0 }
+        let page = try await base.listThreadPage(labelIDs: ids, query: query, max: 100, pageToken: nil)
         return ThreadPage(refs: page.refs.filter { $0.id == Self.id }.map {
             ThreadRef(id: $0.id, snippet: $0.snippet, historyId: String(listedRevision ?? revision))
         }, nextPageToken: nil)
@@ -75,7 +77,7 @@ private actor NavigationProvider {
 
 @MainActor private func cacheNavigationModel(_ provider: NavigationProvider) -> AppModel {
     var settings = CategorisationSettings(); settings.jevEnabled = true
-    let model = AppModel(signedIn: true, settings: settings, folder: .inbox,
+    let model = AppModel(signedIn: true, settings: settings, folder: .inTray,
                          categoriser: Categoriser(local: { _, _, _ in
                              TriageSuggestion(bucket: .reference, nextAction: "", summary: "Fake local summary.")
                          }, remote: { _, me, _, _ in try await provider.classify(mailbox: me) }),
@@ -123,7 +125,7 @@ private actor NavigationProvider {
     }
     for _ in 0..<3 {
         model.selection = nil
-        model.folder = .inbox
+        model.folder = .inTray
         try await waitForCacheNavigation {
             model.selection == NavigationMailbox.id && model.approvalBucket == .noise && !model.suggesting
         }

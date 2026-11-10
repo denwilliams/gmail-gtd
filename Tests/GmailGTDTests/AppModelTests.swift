@@ -133,6 +133,8 @@ func todayDoneUndoRestoresActualLabels(initiallyInInbox: Bool, immediateUndo: Bo
     if initiallyInInbox {
         // Model newly filed actionable mail; the archived case models existing mail with no INBOX.
         try await labels.file(thread: "na01", into: .nextAction)
+    } else {
+        try await demo.modifyThread("na01", add: [], remove: ["INBOX"])
     }
     try await demo.modifyThread("na01", add: ["UNREAD", "STARRED", custom.id], remove: [])
     let before = try await demo.thread("na01", full: true)
@@ -154,7 +156,7 @@ func todayDoneUndoRestoresActualLabels(initiallyInInbox: Bool, immediateUndo: Bo
     if !immediateUndo {
         try await eventually {
             let thread = try? await demo.thread(row.id, full: true)
-            return thread?.messages?.allSatisfy { ($0.labelIds ?? []).contains(ids[.done]!) } == true
+            return thread?.messages?.allSatisfy { ($0.labelIds ?? []).contains(ids[.reference]!) } == true
         }
         let done = try await demo.thread(row.id, full: true)
         #expect(done.messages?.allSatisfy { !($0.labelIds ?? []).contains("INBOX") } == true)

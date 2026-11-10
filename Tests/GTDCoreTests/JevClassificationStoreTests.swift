@@ -40,7 +40,7 @@ private actor CacheProviderProbe {
 
 @Test func jevCacheKeyTracksContentAccountAndRequestButNotLabels() throws {
     let key = try cacheKey()
-    #expect(try cacheKey(cacheThread(history: "2", labels: ["GTD/Noise", "UNREAD"])) == key)
+    #expect(try cacheKey(cacheThread(history: "2", labels: ["🚦/Noise", "UNREAD"])) == key)
     #expect(try cacheKey(mailbox: " ME@example.test ") == key)
     #expect(try cacheKey(mailbox: "other@example.test") != key)
     #expect(try cacheKey(prompt: "Different rules.") != key)
@@ -76,7 +76,7 @@ func jevCachePersistsCategoriesAndOptionalScoresPrivately(score: Double?) async 
     let relaunched = JevClassificationStore(fileURL: url)
     let result = try await relaunched.resolve(key) {
         Issue.record("Persisted cache miss caused redundant provider work")
-        return JevClassification(bucket: .done)
+        return JevClassification(bucket: .junk)
     }
     #expect(result.bucket == .noise)
     #expect(result.noiseLikelihood == score)

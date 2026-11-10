@@ -52,13 +52,13 @@ struct MailView: View {
             List(selection: $model.folder) {
                 sidebarRow("Today", Folder.today.symbol, .yellow, hint: "\u{2318}T").tag(Folder.today)
                 Section("Process") {
-                    sidebarRow("Inbox", Folder.inbox.symbol, .accentColor, hint: "\u{2318}0").tag(Folder.inbox)
+                    sidebarRow("In-tray", Folder.inTray.symbol, .accentColor, hint: "\u{2318}0").tag(Folder.inTray)
                     sidebarRow("Backlog", Folder.backlog.symbol, .accentColor, hint: "").tag(Folder.backlog)
                 }
                 Section("Local") {
                     sidebarRow("Corrections", Folder.corrections.symbol, .orange, hint: "").tag(Folder.corrections)
                 }
-                Section("GTD") {
+                Section("Status") {
                     ForEach(GTDBucket.allCases, id: \.self) { b in
                         sidebarRow(b.title, Folder.bucket(b).symbol, b.color, hint: "\u{2318}\(b.shortcut)").tag(Folder.bucket(b))
                     }
@@ -108,6 +108,9 @@ struct MailView: View {
             }
         }
         .toolbar {
+            if model.folder != .today && model.folder != .corrections && model.deNoiseBatch == nil {
+                ToolbarItem { FilterMenus() }
+            }
             ToolbarItem { Button("Refresh", systemImage: "arrow.clockwise") { Task { await model.refresh() } } }
             ToolbarItem { Button("Categorisation Settings", systemImage: "slider.horizontal.3") { model.showingCategorisationSettings = true } }
             ToolbarItem { Button("Sign Out") { model.signOut() } }
@@ -140,7 +143,7 @@ struct UndoToast: View {
 
     var body: some View {
         let tint = move.destination?.color ?? .accentColor
-        let symbol = move.destination.map { Folder.bucket($0).symbol } ?? Folder.inbox.symbol
+        let symbol = move.destination.map { Folder.bucket($0).symbol } ?? Folder.inTray.symbol
         HStack(spacing: 10) {
             Image(systemName: symbol).foregroundStyle(tint)
             Text(move.summary).fontWeight(.medium)
@@ -194,7 +197,7 @@ struct ThreadListView: View {
     var body: some View {
         @Bindable var model = model
         VStack(spacing: 0) {
-            if model.folder == .inbox {
+            if model.folder == .inTray {
                 VStack(alignment: .leading, spacing: 6) {
                     Button("De-noise Mode", systemImage: "speaker.slash") { model.startDeNoiseMode() }
                         .disabled(!model.canStartDeNoiseMode)
@@ -213,6 +216,15 @@ struct ThreadListView: View {
             }
             .overlay {
                 if model.loading && model.rows.isEmpty { ProgressView() }
+                else if !model.filter.isEmpty && model.rows.isEmpty {
+                    ContentUnavailableView {
+                        Label("No Matching Mail", systemImage: "line.3.horizontal.decrease.circle")
+                    } description: {
+                        Text("Nothing in \(model.folder.title) matches the filters.")
+                    } actions: {
+                        Button("Clear Filters") { model.clearFilters() }
+                    }
+                }
                 else if model.folder == .backlog && model.rows.isEmpty {
                     ContentUnavailableView("No Backlog Mail", systemImage: Folder.backlog.symbol,
                                            description: Text("Apply the \(LabelManager.backlogLabelName) label in Gmail and archive old mail to process it here."))
@@ -243,6 +255,7 @@ struct RowView: View {
                 .redacted(reason: row.loaded ? [] : .placeholder)
             // The on-device summary replaces the raw snippet once it is ready.
             Text(suggestion?.headline ?? row.snippet).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+            FacetSummary(labelIDs: row.labelIDs)
             rowTag(for: suggestion)
         }
         .padding(.vertical, 2)
@@ -255,7 +268,7 @@ extension RowView {
     /// The inbox prefers Jev's category; filed buckets keep their on-device action text.
     @ViewBuilder fileprivate func rowTag(for suggestion: TriageSuggestion?) -> some View {
         switch model.folder {
-        case .inbox, .backlog:
+        case .inTray, .backlog:
             if let bucket = model.inboxBucket(for: row.id) { BucketChip(bucket: bucket) }
         case .bucket(.nextAction):
             if let nextAction = suggestion?.nextAction, !nextAction.isEmpty {
@@ -280,6 +293,7 @@ struct ThreadDetailView: View {
         if let thread = model.detail {
             VStack(spacing: 0) {
                 if model.folder.isTriage { TriageBar(threadID: thread.id) } else { BucketBar(threadID: thread.id) }
+                FacetBar().padding(.horizontal, 10).padding(.bottom, 8)
                 if model.showsFiledJevStatus {
                     VStack(alignment: .leading, spacing: 8) {
                         if model.suggestion == nil, let note = model.aiNote {
@@ -330,33 +344,27 @@ struct MessagesView: View {
     }
 }
 
-/// The bar above a filed thread. The inbox is for deciding where mail goes; inside a bucket the job is
-/// to finish the thing, or move it somewhere else.
+/// The bar above a filed thread. The In-tray is for deciding where mail goes; inside a status the job is
+/// to finish the thing (Done files it as Reference), or move it somewhere else.
 struct BucketBar: View {
     @Environment(AppModel.self) private var model
     let threadID: String
 
     var body: some View {
         HStack {
-            // Two ways to be finished with a thread: mark it Done, or keep it as Reference.
             if model.canFinish {
                 Button { Task { await model.finishSelected() } } label: {
-                    Label("Done", systemImage: Folder.bucket(.done).symbol)
+                    Label("Done", systemImage: "checkmark.circle")
                 }
-                .buttonStyle(.borderedProminent).tint(GTDBucket.done.color)
-            }
-            if model.currentBucket != .reference {
-                Button { Task { await model.fileSelected(into: .reference) } } label: {
-                    Label("Reference", systemImage: Folder.bucket(.reference).symbol)
-                }
-                .buttonStyle(BucketButtonStyle(color: GTDBucket.reference.color))
+                .buttonStyle(.borderedProminent).tint(GTDBucket.reference.color)
+                .help("Finished with it: files it as Reference (E)")
             }
             Menu {
                 ForEach(GTDBucket.allCases.filter { $0 != model.currentBucket }, id: \.self) { b in
                     Button { Task { await model.fileSelected(into: b) } } label: { Text(verbatim: "\(b.shortcut)  \(b.title)") }
                 }
                 Divider()
-                Button("Back to Inbox") { Task { await model.unfileSelected() } }
+                Button("Back to In-tray") { Task { await model.unfileSelected() } }
             } label: {
                 Label("Move to", systemImage: "arrow.turn.up.right")
             }
@@ -373,7 +381,7 @@ struct BucketBar: View {
     }
 }
 
-/// The seven bucket buttons in whichever form fits: full names, short names, then numbers only.
+/// The seven status buttons in whichever form fits: full names, short names, then numbers only.
 struct BucketButtons: View {
     @Environment(AppModel.self) private var model
 
@@ -481,7 +489,7 @@ struct SummaryView: View {
             ContentUnavailableView {
                 Label("No Summary Yet", systemImage: "sparkles")
             } description: {
-                Text(model.aiNote ?? "Summaries are made on this Mac when you open a thread in the inbox.")
+                Text(model.aiNote ?? "Summaries are made on this Mac when you open a thread in the In-tray.")
             } actions: {
                 Button("Summarise") { model.regenerateSelected() }
             }
@@ -520,7 +528,7 @@ struct TodayView: View {
                     Text("Today").font(.largeTitle.bold())
                     Spacer()
                     Button("Open Gmail", systemImage: "arrow.up.forward.square") { model.openGmail() }
-                    Button("Process Inbox") { model.folder = .inbox }.buttonStyle(.borderedProminent)
+                    Button("Process In-tray") { model.folder = .inTray }.buttonStyle(.borderedProminent)
                 }
 
                 GroupBox("Digest") {
@@ -539,7 +547,7 @@ struct TodayView: View {
                             ForEach(model.nextActions) { row in
                                 HStack {
                                     Button { Task { await model.finish(row) } } label: { Image(systemName: "circle") }
-                                        .buttonStyle(.plain).help("Done: moves the thread to GTD/Done")
+                                        .buttonStyle(.plain).help("Done: files the thread as Reference")
                                     Text(row.subject).lineLimit(1)
                                     Spacer()
                                     Text(row.from.displayName)
@@ -574,8 +582,8 @@ struct TodayView: View {
                             }
                             .frame(maxWidth: .infinity, alignment: .leading).padding(4)
                         }
-                        GroupBox("Inbox") {
-                            Text("\(model.inboxCount) threads").frame(maxWidth: .infinity, alignment: .leading).padding(4)
+                        GroupBox("In-tray") {
+                            Text("\(model.inTrayCount) threads").frame(maxWidth: .infinity, alignment: .leading).padding(4)
                         }
                     }
                     .frame(width: 300)
@@ -633,18 +641,16 @@ struct ProjectDetailView: View {
                 HStack {
                     Text(thread.messages?.last?.subject ?? "").font(.title2.bold()).lineLimit(1)
                     Spacer()
-                    Button { Task { await model.finishSelected() } } label: { Label("Done", systemImage: Folder.bucket(.done).symbol) }
-                        .buttonStyle(.borderedProminent).tint(GTDBucket.done.color)
-                    Button { Task { await model.fileSelected(into: .reference) } } label: {
-                        Label("Reference", systemImage: Folder.bucket(.reference).symbol)
-                    }
-                    .buttonStyle(BucketButtonStyle(color: GTDBucket.reference.color))
+                    Button { Task { await model.finishSelected() } } label: { Label("Done", systemImage: "checkmark.circle") }
+                        .buttonStyle(.borderedProminent).tint(GTDBucket.reference.color)
+                        .help("Finished with it: files it as Reference (E)")
                     if model.planning { ProgressView().controlSize(.small) }
                     Button("Regenerate", systemImage: "sparkles") { model.regenerateSelected() }
                         .disabled(model.planning)
                     Button("Open in Gmail", systemImage: "arrow.up.forward.square") { model.openInGmail(thread.id) }
                 }
                 .padding(10)
+                FacetBar().padding(.horizontal, 10).padding(.bottom, 8)
                 if let note = model.aiNote, model.store.plan(for: thread.id) == nil {
                     Text(note).font(.caption).foregroundStyle(.secondary).padding(.horizontal, 10)
                 }
@@ -698,7 +704,6 @@ struct KeyHintBar: View {
                 hint(["A"], "accept")
             } else {
                 if model.canFinish { hint(["E"], "done") }
-                hint(["4"], "reference")
                 hint(["1", "–", "7"], "move to")
             }
             hint(["\u{2318}", "1", "–", "7"], "go to")
@@ -728,15 +733,15 @@ struct ShortcutHUD: View {
             HStack(alignment: .top, spacing: 36) {
                 group("Navigate", [
                     (["↑", "↓"], "Move through emails", nil),
-                    (["\u{2318}", "0"], "Go to Inbox", nil),
+                    (["\u{2318}", "0"], "Go to In-tray", nil),
                     (["\u{2318}", "T"], "Go to Today", nil),
                 ] + GTDBucket.allCases.map { (["\u{2318}", String($0.shortcut)], "Go to \($0.title)", $0.color) })
                 group("File the open thread", GTDBucket.allCases.map { ([String($0.shortcut)], $0.title, $0.color) } + [
-                    (["0"], "Back to Inbox", nil),
+                    (["0"], "Back to In-tray", nil),
                 ])
                 group("Thread", [
-                    (["A"], "Accept the suggestion (Inbox/Backlog)", nil),
-                    (["E"], "Done: finished with it (same as 7)", nil),
+                    (["A"], "Accept the suggestion (In-tray/Backlog)", nil),
+                    (["E"], "Done: file as Reference (same as 4)", nil),
                     (["R"], "Regenerate the suggestion", nil),
                     (["O"], "Open in Gmail", nil),
                     (["\u{2318}", "Z"], "Undo the last move", nil),

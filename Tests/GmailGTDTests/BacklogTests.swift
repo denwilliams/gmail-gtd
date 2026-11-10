@@ -56,7 +56,7 @@ private actor BacklogProbe: MailService {
     #expect(try await service.labels().allSatisfy { $0.name != LabelManager.backlogLabelName })
 
     let backlog = try await service.createLabel(LabelManager.backlogLabelName)
-    try await service.base.modifyThread("in01", add: [backlog.id], remove: ["INBOX"])
+    try await service.base.modifyThread("in01", add: [backlog.id], remove: ["INBOX", DemoMailService.inTrayID])
     await model.refresh()
     try await backlogEventually { model.detail?.id == "in01" && model.suggestion != nil }
     #expect(model.rows.map(\.id) == ["in01"])
@@ -69,10 +69,11 @@ private actor BacklogProbe: MailService {
 @Test @MainActor func backlogListsArchivedMailPagesWithoutRestoringInbox() async throws {
     let service = BacklogProbe()
     let backlog = try await service.createLabel(LabelManager.backlogLabelName)
-    let refs = try await service.base.listThreads(labelIDs: ["INBOX"], max: 50)
+    let refs = try await service.base.listThreads(labelIDs: [DemoMailService.inTrayID], max: 50)
     let oldIDs = Array(refs.prefix(10).map(\.id))
     for id in oldIDs {
-        try await service.base.modifyThread(id, add: [backlog.id], remove: ["INBOX"])
+        // Backlog replaces In-tray as the thread's one 🚦 label, and the mail is archived.
+        try await service.base.modifyThread(id, add: [backlog.id], remove: ["INBOX", DemoMailService.inTrayID])
     }
     let beforeInbox = try await service.base.threadCount(labelID: "INBOX")
     let model = await backlogModel(using: service)
@@ -88,7 +89,7 @@ private actor BacklogProbe: MailService {
     #expect(await service.requestedLabels.allSatisfy { $0 == [backlog.id] })
     #expect(try await service.base.threadCount(labelID: "INBOX") == beforeInbox)
 
-    model.folder = .inbox
+    model.folder = .inTray
     try await backlogEventually { !model.rows.isEmpty && model.rows.allSatisfy { !oldIDs.contains($0.id) } }
     #expect(model.rows.allSatisfy { !oldIDs.contains($0.id) })
     #expect(await service.writes == 0)
@@ -101,7 +102,7 @@ private actor BacklogProbe: MailService {
 @Test @MainActor func failedBacklogFilingRestoresRowAndKeepsLabels() async throws {
     let service = BacklogProbe()
     let backlog = try await service.createLabel(LabelManager.backlogLabelName)
-    try await service.base.modifyThread("in01", add: [backlog.id], remove: ["INBOX"])
+    try await service.base.modifyThread("in01", add: [backlog.id], remove: ["INBOX", DemoMailService.inTrayID])
     let before = try await service.thread("in01", full: true)
     let model = await backlogModel(using: service)
     defer { model.signOut() }

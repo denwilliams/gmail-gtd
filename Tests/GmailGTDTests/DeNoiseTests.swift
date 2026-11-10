@@ -77,7 +77,7 @@ private actor DeNoiseRemote {
         guard let remote else { throw DeNoiseTestError.unavailable }
         return try await remote.classify()
     })
-    let model = AppModel(signedIn: true, settings: settings, folder: .inbox,
+    let model = AppModel(signedIn: true, settings: settings, folder: .inTray,
                          categoriser: categoriser, loadJevToken: { "mock-token" })
     model.demo = true   // Never use real credentials or persist private state.
     await model.connect(using: mail, persist: false)
@@ -220,7 +220,12 @@ func deNoiseCorrectionsShrinkAndLGTMFilesOnlyRemainingSnapshot(bucket: GTDBucket
         #expect(labels.contains(DemoMailService.labelID(.noise)))
         #expect(!labels.contains("INBOX"))
     }
-    for row in outsiders { #expect(try await mail.labelSet(row.id) == Set(["INBOX"] + (row.unread ? ["UNREAD"] : []))) }
+    for row in outsiders {
+        let labels = try await mail.labelSet(row.id)
+        #expect(labels.isSuperset(of: ["INBOX", DemoMailService.inTrayID]))   // still waiting in the In-tray
+        #expect(labels.isDisjoint(with: GTDBucket.allCases.map(DemoMailService.labelID)))
+        #expect(labels.contains("UNREAD") == row.unread)
+    }
     #expect(await mail.writes.count == 10)
     #expect(model.corrections.records.count == 1) // Batch approvals are not manual mismatches.
 

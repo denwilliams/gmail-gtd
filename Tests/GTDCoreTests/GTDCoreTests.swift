@@ -2,19 +2,29 @@ import Testing
 import Foundation
 @testable import GTDCore
 
-@Test func labelsAreNestedUnderGTD() {
+@Test func statusLabelsAreNestedUnderTrafficLight() {
     for bucket in GTDBucket.allCases {
-        #expect(bucket.labelName.hasPrefix("GTD/"))
+        #expect(bucket.labelName.hasPrefix("🚦/"))
         #expect(GTDBucket(labelName: bucket.labelName) == bucket)
     }
+    #expect(GTDBucket.allCases.map(\.labelName) == ["🚦/Next Action", "🚦/Waiting For", "🚦/Someday", "🚦/Reference",
+                                                    "🚦/Project", "🚦/Noise", "🚦/Junk"])
+    #expect(GTDBucket.allCases.map(\.shortcut) == ["1", "2", "3", "4", "5", "6", "7"])
+    #expect(LabelManager.inTrayLabelName == "🚦/In-tray")
+    #expect(GTDBucket(labelName: "GTD/Next Action") == nil)   // the old labels are ignored
+}
+
+@Test func retiredDoneDecodesAsReference() throws {
+    #expect(try JSONDecoder().decode([GTDBucket].self, from: Data(#"["done","junk"]"#.utf8)) == [.reference, .junk])
+    #expect(throws: DecodingError.self) { try JSONDecoder().decode(GTDBucket.self, from: Data(#""bogus""#.utf8)) }
 }
 
 @Test func cliNamesParse() {
     #expect(GTDBucket(cliName: "next") == .nextAction)
     #expect(GTDBucket(cliName: "waiting-for") == .waitingFor)
     #expect(GTDBucket(cliName: "noise") == .noise)
-    #expect(GTDBucket(cliName: "done") == .done)
-    #expect(GTDBucket.done.labelName == "GTD/Done")
+    #expect(GTDBucket(cliName: "done") == .reference)
+    #expect(GTDBucket(cliName: "junk") == .junk)
     #expect(GTDBucket(cliName: "nope") == nil)
 }
 
@@ -46,9 +56,9 @@ import Foundation
     let demo = DemoMailService()
     let labels = LabelManager(client: demo)
     let ids = try await labels.ensureLabels()
-    #expect(try await demo.threadCount(labelID: "INBOX") == 20)
+    #expect(try await demo.threadCount(labelID: labels.inTrayLabelID()) == 20)
     for bucket in GTDBucket.allCases {
-        #expect(try await demo.threadCount(labelID: ids[bucket]!) >= 3)
+        #expect(try await demo.threadCount(labelID: ids[bucket]!) >= 1)
     }
 }
 
@@ -61,14 +71,18 @@ func filingSetsInboxMembershipAndPreservesMail(bucket: GTDBucket, initiallyInInb
     let unrelated: Set<String> = ["UNREAD", "STARRED", custom.id]
     let previous: GTDBucket = bucket == .reference ? .noise : .reference
     try await demo.modifyThread("in07", add: Array(unrelated) + [ids[previous]!],
-                                remove: initiallyInInbox ? [] : ["INBOX"])
+                                remove: [DemoMailService.inTrayID] + (initiallyInInbox ? [] : ["INBOX"]))
     let before = try await demo.thread("in07", full: true)
 
     try await labels.file(thread: "in07", into: bucket)
     // Applying the same category again must also be safe.
     try await labels.file(thread: "in07", into: bucket)
 
-    var expected = unrelated.union([ids[bucket]!])
+    // in07's Source, Classification and Tag labels are not touched by filing.
+    let catalog = try await labels.catalog()
+    let facets = Set(before.messages?.last?.labelIds ?? []).filter { catalog.label(id: $0) != nil }
+    #expect(facets.count == 3)
+    var expected = unrelated.union(facets).union([ids[bucket]!])
     if [GTDBucket.nextAction, .waitingFor, .someday].contains(bucket) { expected.insert("INBOX") }
     let after = try await demo.thread("in07", full: true)
     let messages = try #require(after.messages)
@@ -89,6 +103,7 @@ func changingBetweenActionableAndSearchOnlyUpdatesInbox(actionable: GTDBucket, s
     let ids = try await labels.ensureLabels()
 
     try await labels.file(thread: "in01", into: searchOnly)
+    #expect(try await demo.threadCount(labelID: DemoMailService.inTrayID) == 19)   // filing leaves the In-tray
     let archived = try await labels.managedLabels(in: try await demo.thread("in01").messages!.last!.labelIds ?? [])
     #expect(archived == [ids[searchOnly]!])
 
@@ -107,19 +122,33 @@ func changingBetweenActionableAndSearchOnlyUpdatesInbox(actionable: GTDBucket, s
     #expect(try await labels.managedLabels(in: try await demo.thread("in01").messages!.last!.labelIds ?? []) == archived)
 }
 
-@Test func doneIsABucketSoEveryThreadKeepsAGTDLabel() async throws {
+@Test func finishingIsReferenceSoEveryThreadKeepsAStatus() async throws {
     let demo = DemoMailService()
     let labels = LabelManager(client: demo)
     let ids = try await labels.ensureLabels()
     let nextBefore = try await demo.threadCount(labelID: ids[.nextAction]!)
-    let doneBefore = try await demo.threadCount(labelID: ids[.done]!)
-    try await labels.file(thread: "na01", into: .done)
+    let referenceBefore = try await demo.threadCount(labelID: ids[.reference]!)
+    let inboxBefore = try await demo.threadCount(labelID: "INBOX")
+    try await labels.file(thread: "na01", into: .reference)
     #expect(try await demo.threadCount(labelID: ids[.nextAction]!) == nextBefore - 1)
-    #expect(try await demo.threadCount(labelID: ids[.done]!) == doneBefore + 1)   // labelled Done, not stripped
-    #expect(try await demo.threadCount(labelID: "INBOX") == 20)                   // and not returned to the inbox
+    #expect(try await demo.threadCount(labelID: ids[.reference]!) == referenceBefore + 1)
+    #expect(try await demo.threadCount(labelID: "INBOX") == inboxBefore - 1)   // archived, not returned
 
     try await labels.unfile(thread: "na02")
-    #expect(try await demo.threadCount(labelID: "INBOX") == 21)
+    #expect(try await demo.threadCount(labelID: labels.inTrayLabelID()) == 21)
+    let back = try #require(try await demo.thread("na02").messages?.last?.labelIds)
+    #expect(Set(back).isSuperset(of: ["INBOX", DemoMailService.inTrayID]))
+    #expect(Set(back).isDisjoint(with: ids.values))   // exactly one status: In-tray
+}
+
+@Test func junkIsArchivedNeverTrashed() async throws {
+    let demo = DemoMailService()
+    let labels = LabelManager(client: demo)
+    let ids = try await labels.ensureLabels()
+    try await labels.file(thread: "in04", into: .junk)
+    let after = Set(try #require(try await demo.thread("in04").messages?.last?.labelIds))
+    #expect(after.contains(ids[.junk]!))
+    #expect(!after.contains("INBOX") && !after.contains("TRASH") && !after.contains(DemoMailService.inTrayID))
 }
 
 @Test func demoThreadsDecodeLikeGmailThreads() async throws {
@@ -134,8 +163,8 @@ func changingBetweenActionableAndSearchOnlyUpdatesInbox(actionable: GTDBucket, s
 @Test func demoStateIsPerInstance() async throws {
     let a = DemoMailService(), b = DemoMailService()
     try await LabelManager(client: a).file(thread: "in01", into: .reference)
-    #expect(try await a.threadCount(labelID: "INBOX") == 19)
-    #expect(try await b.threadCount(labelID: "INBOX") == 20)   // a fresh instance is a reset
+    #expect(try await a.threadCount(labelID: DemoMailService.inTrayID) == 19)
+    #expect(try await b.threadCount(labelID: DemoMailService.inTrayID) == 20)   // a fresh instance is a reset
 }
 
 @Test func triageRulesChooseBucketFromAnswers() {
@@ -394,7 +423,7 @@ private let sampleSuggestion = TriageSuggestion(bucket: .nextAction, nextAction:
     var token: String?
     var pages = 0
     repeat {
-        let page = try await demo.listThreadPage(labelIDs: ["INBOX"], query: nil, max: 6, pageToken: token)
+        let page = try await demo.listThreadPage(labelIDs: [DemoMailService.inTrayID], query: nil, max: 6, pageToken: token)
         ids += page.refs.map(\.id)
         token = page.nextPageToken
         pages += 1
@@ -402,7 +431,7 @@ private let sampleSuggestion = TriageSuggestion(bucket: .nextAction, nextAction:
     #expect(ids.count == 20)
     #expect(Set(ids).count == 20)
     #expect(pages == 4)   // 6 + 6 + 6 + 2
-    let firstPage = try await demo.listThreadPage(labelIDs: ["INBOX"], query: nil, max: 20, pageToken: nil)
+    let firstPage = try await demo.listThreadPage(labelIDs: [DemoMailService.inTrayID], query: nil, max: 20, pageToken: nil)
     #expect(firstPage.nextPageToken == nil)   // an exact fit has no next page
     #expect(firstPage.refs.map(\.id) == ids)
 }
@@ -432,13 +461,13 @@ private let sampleSuggestion = TriageSuggestion(bucket: .nextAction, nextAction:
     let labels = LabelManager(client: demo)
     let ids = try await labels.ensureLabels()
 
-    // From the inbox into an actionable bucket, and back (inbox membership is preserved).
+    // From the In-tray into an actionable status, and back (Inbox membership is preserved).
     let before = try await labels.managedLabels(in: try await demo.thread("in01", full: true).messages!.last!.labelIds ?? [])
-    #expect(before == ["INBOX"])                               // UNREAD is not ours to touch
+    #expect(before == ["INBOX", DemoMailService.inTrayID])     // UNREAD and Source labels are not ours to touch
     try await labels.file(thread: "in01", into: .someday)
-    #expect(try await demo.threadCount(labelID: "INBOX") == 20)
+    #expect(try await demo.threadCount(labelID: DemoMailService.inTrayID) == 19)
     try await labels.restore(thread: "in01", to: before)
-    #expect(try await demo.threadCount(labelID: "INBOX") == 20)
+    #expect(try await demo.threadCount(labelID: DemoMailService.inTrayID) == 20)
     #expect(try await demo.threadCount(labelID: ids[.someday]!) == 3)
     let unread = try await demo.thread("in01", full: true).messages!.last!.labelIds ?? []
     #expect(unread.contains("UNREAD"))                         // still unread: undo didn't disturb it
@@ -446,11 +475,12 @@ private let sampleSuggestion = TriageSuggestion(bucket: .nextAction, nextAction:
     // From one bucket to another, and back.
     let nextBefore = try await demo.threadCount(labelID: ids[.nextAction]!)
     let was = try await labels.managedLabels(in: try await demo.thread("na01", full: true).messages!.last!.labelIds ?? [])
-    #expect(was == [ids[.nextAction]!])
-    try await labels.file(thread: "na01", into: .done)
+    #expect(was == ["INBOX", ids[.nextAction]!])
+    let referenceBefore = try await demo.threadCount(labelID: ids[.reference]!)
+    try await labels.file(thread: "na01", into: .reference)
     try await labels.restore(thread: "na01", to: was)
     #expect(try await demo.threadCount(labelID: ids[.nextAction]!) == nextBefore)
-    #expect(try await demo.threadCount(labelID: ids[.done]!) == 3)
+    #expect(try await demo.threadCount(labelID: ids[.reference]!) == referenceBefore)
 }
 
 // MARK: - Saved client ID
@@ -470,4 +500,10 @@ private let sampleSuggestion = TriageSuggestion(bucket: .nextAction, nextAction:
     let loaded = try JSONDecoder().decode(OAuthConfig.self, from: #require(store.data(forKey: "oauthConfig")))
     #expect(loaded.clientID == "id-123")
     #expect(loaded.clientSecret == "s3cret")
+}
+
+@Test func iOSSignInRedirectsToTheReversedClientID() {
+    let auth = GmailAuth(config: OAuthConfig(clientID: "123-abc.apps.googleusercontent.com"))
+    #expect(auth.iOSCallbackScheme == "com.googleusercontent.apps.123-abc")
+    #expect(auth.iOSRedirect == "com.googleusercontent.apps.123-abc:/oauthredirect")
 }

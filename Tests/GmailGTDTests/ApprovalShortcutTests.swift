@@ -61,7 +61,7 @@ private enum ShortcutTestError: Error { case unavailable }
 }
 
 @MainActor private func shortcutModel(jevEnabled: Bool = false, remoteSucceeds: Bool = true,
-                                      folder: Folder = .inbox, service: DemoMailService = DemoMailService()) async throws -> AppModel {
+                                      folder: Folder = .inTray, service: DemoMailService = DemoMailService()) async throws -> AppModel {
     var settings = CategorisationSettings(); settings.jevEnabled = jevEnabled
     let model = AppModel(signedIn: true, settings: settings, folder: folder,
                          categoriser: Categoriser(local: { _, _, _ in
@@ -99,7 +99,7 @@ private enum ShortcutTestError: Error { case unavailable }
         #expect(model.error == nil)
     }
 
-    @Test(arguments: [Folder.inbox, .backlog], GTDBucket.allCases)
+    @Test(arguments: [Folder.inTray, .backlog], GTDBucket.allCases)
     func numberKeysFileSameCategoriesFromInboxAndBacklog(folder: Folder, bucket: GTDBucket) async throws {
         let service = DemoMailService()
         let unrelated = try await service.createLabel("Keep me")

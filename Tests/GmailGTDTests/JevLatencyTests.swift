@@ -33,7 +33,7 @@ private actor HeldLocalModel {
     var settings = CategorisationSettings(); settings.jevEnabled = true
     let categoriser = Categoriser(local: { thread, _, _ in try await local.suggest(thread) },
                                   remote: { _, _, _, _ in JevClassification(bucket: .noise) })
-    let model = AppModel(signedIn: true, settings: settings, folder: .inbox,
+    let model = AppModel(signedIn: true, settings: settings, folder: .inTray,
                          categoriser: categoriser, loadJevToken: { "mock-token" })
     model.demo = true
     defer { model.signOut() }
@@ -65,7 +65,7 @@ private actor HeldLocalModel {
     var settings = CategorisationSettings(); settings.jevEnabled = true
     let categoriser = Categoriser(local: { thread, _, _ in try await local.suggest(thread) },
                                   remote: { _, _, _, _ in JevClassification(bucket: .noise) })
-    let model = AppModel(signedIn: true, settings: settings, folder: .inbox,
+    let model = AppModel(signedIn: true, settings: settings, folder: .inTray,
                          categoriser: categoriser, loadJevToken: { "mock-token" })
     model.demo = true
     defer { model.signOut() }

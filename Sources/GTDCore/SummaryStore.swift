@@ -7,12 +7,16 @@ public struct CachedHeader: Codable, Sendable, Equatable {
     public var subject: String
     public var date: Date?
     public var unread: Bool
+    /// Every label on the thread, so cached rows can show and filter by Source, Classification and Tags.
+    /// Missing from headers saved before labels were tracked.
+    public var labelIds: [String]?
 
-    public init(from: String, subject: String, date: Date?, unread: Bool) {
+    public init(from: String, subject: String, date: Date?, unread: Bool, labelIds: [String]? = nil) {
         self.from = from
         self.subject = subject
         self.date = date
         self.unread = unread
+        self.labelIds = labelIds
     }
 }
 
