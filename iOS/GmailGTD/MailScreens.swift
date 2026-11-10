@@ -27,7 +27,7 @@ struct MailNavigation: View {
         .overlay(alignment: .bottom) {
             if let move = model.undoToast {
                 UndoToast(move: move)
-                    .padding(.bottom, path.last.map { if case .thread = $0 { true } else { false } } == true ? 84 : 24)
+                    .padding(.bottom, path.last.map { if case .thread = $0 { true } else { false } } == true ? 150 : 24)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
@@ -316,7 +316,9 @@ struct FilterSheet: View {
                 Spacer()
                 if on { Image(systemName: "checkmark").foregroundStyle(.tint) }
             }
+            .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
     }
 }
 
