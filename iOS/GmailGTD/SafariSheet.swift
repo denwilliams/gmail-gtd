@@ -13,3 +13,14 @@ struct SafariSheet: UIViewControllerRepresentable {
 
     func updateUIViewController(_ controller: SFSafariViewController, context: Context) {}
 }
+
+/// Opens connections to Gmail early (DNS, TLS), so the sheet doesn't wait for them. Keep the token while signed in.
+@MainActor
+enum GmailPrewarm {
+    static func start() -> SFSafariViewController.PrewarmingToken {
+        SFSafariViewController.prewarmConnections(to: [
+            URL(string: "https://mail.google.com/mail/mu/mp/")!,
+            URL(string: "https://accounts.google.com/")!,
+        ])
+    }
+}
